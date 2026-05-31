@@ -1,35 +1,34 @@
-# Debug logs
-claude_debug/logs/
-*.log
-
 # Python cache
 __pycache__/
 *.pyc
 *.pyo
 
-# YOLO model weights (HUGE - never commit these)
+# YOLO model weights
 *.pt
 *.pth
 *.weights
 *.onnx
 *.engine
-*.tflite
 
-# Dataset files
-*.jpg
-*.jpeg
-*.png
-*.mp4
-*.avi
-*.bag
+# Image/video captures
+captured_images/
+detected_images/
+detections/
+confirmed/
+confirmed_barrels/
 
-# Large data folders
-datasets/
-runs/
-weights/
-models/
+# Training data
+dataset_raw/
+
+# Debug logs
+claude_debug/logs/
+
+# JSON logs
+*.json
+canister_log.txt
+
+# Jupyter checkpoints
+.ipynb_checkpoints/
 
 # Environment
 .env
-*.env
-
