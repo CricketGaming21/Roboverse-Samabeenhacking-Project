@@ -1,0 +1,35 @@
+# Debug logs
+claude_debug/logs/
+*.log
+
+# Python cache
+__pycache__/
+*.pyc
+*.pyo
+
+# YOLO model weights (HUGE - never commit these)
+*.pt
+*.pth
+*.weights
+*.onnx
+*.engine
+*.tflite
+
+# Dataset files
+*.jpg
+*.jpeg
+*.png
+*.mp4
+*.avi
+*.bag
+
+# Large data folders
+datasets/
+runs/
+weights/
+models/
+
+# Environment
+.env
+*.env
+
