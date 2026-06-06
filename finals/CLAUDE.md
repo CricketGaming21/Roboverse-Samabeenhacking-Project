@@ -88,11 +88,74 @@ finals/
    (auto-push hook sends it to GitHub automatically)
 
 ## Reference files — read these before writing any code
-- reference/qualifier_code/     full qualifier scripts
-- reference/project_details/    competition brief (RoboVerse.pptx)
-- reference/sample_code/        organiser code (kolomee.py, getDepth.py etc.)
-- reference/learning_materials/ qualifier workshop PDFs
-- reference/hardware_docs/      hardware specs
+
+### reference/project_details/ — competition briefs, rules, scoring
+- `Potential Detection Targets.txt` — organiser hints on likely detection targets:
+  fiducial markers (Aruco / QR / AprilTag). Includes sample OpenCV Aruco detection
+  code with depth-to-3D-position conversion (pixel + depth → X,Y,Z metres).
+
+### reference/sample_code/ — organiser-provided code
+**hula_swarm/** — HULA drone swarm control and video
+- `dola.py` — "Dola" discovery listener: listens on UDP for HULA broadcast packets
+  and maintains a table of discovered aircraft IPs on the network.
+- `huladola.py` — reference for connecting to multiple HULA drones via pyhulax,
+  using Dola to find all drone IPs and pulling all video streams onto one computer
+  for multi-drone detection. (pyhulax docs: https://pyhulax.xenops.ae)
+
+**flight_control/** — drone flight control with UWB
+- `kolomee.py` — MAVSDK offboard velocity control (VelocityNedYaw) using UWB
+  position fed in via ROS2 PoseStamped. P-gain navigation to waypoints with
+  velocity limits. Key pattern for UWB-corrected position flight.
+
+**uwb/** — UWB positioning
+- `UWBParserThread.py` — threaded serial parser for the UWB tag (921600 baud,
+  auto-detects USB COM port). Maintains `{tag_id: (x, y, update_time)}` with
+  thread-safe access and configurable arena origin offset.
+
+**yolo_to_rknn/** — converting YOLO models for the NPU
+- `convertyolotoonnx.py` — minimal YOLO → ONNX export (opset 12, static shapes).
+- `convertyolotoonnx_2.py` — YOLO → ONNX export with full RKNN-compat flags
+  explained (static input, simplify, FP32, imgsz 640).
+- `convertrknn.py` — ONNX → RKNN build/export for rk3588 with step-by-step
+  error checks; notes how to enable INT8 quantization.
+- `convertrknn2.py` — compact ONNX → RKNN variant; shows 0-1 input normalisation
+  via mean 0 / std 255 and optional w8a8 INT8.
+
+**rknn_detection/** — running YOLO on the NPU
+- `getDepthAndDetect.py` — full pipeline: RealSense RGB+depth, RKNNLite YOLO
+  inference, depth-aligned bounding boxes → 3D object position.
+- `rknndecoder.py` — YOLOv11 RKNN output decoder: sigmoid, xywh→xyxy, NMS,
+  detection drawing helpers.
+- `testrknn_with_display.py` — standalone RKNN model test on a single image
+  with post-processing and display; good first check after converting a model.
+
+**realsense/** — RealSense depth camera samples (from qualifier hardware)
+- `getRGB.py` — capture and display the RGB stream.
+- `getDepth.py` — read depth value at image centre and visualise colorised depth.
+- `getInfra.py` — capture left/right infrared streams.
+- `getSyncDepthColor.py` — align depth to colour stream for synced frames.
+- `getDepthPointCloud.py` — generate a point cloud from depth + colour.
+- `getDepthAndDetect.py` — same RGB+depth+RKNN detection pipeline as
+  rknn_detection/ copy.
+- `generateTopDown.py` — build a top-down occupancy grid from depth data with
+  a downward-facing camera (camera frame → north-east grid).
+- `rknndecoder.py` — duplicate of rknn_detection/rknndecoder.py.
+
+### reference/learning_materials/ — qualifier workshop PDFs
+- `LearningMaterial1.pdf`
+- `LearningMaterial2.pdf`
+- `LearningMaterial3.pdf`
+- `Supplmentary_LearningMaterial1 (1).pdf`
+- `Supplmentary_LearningMaterial2 (1).pdf`
+
+### reference/hardware_docs/ — hardware manuals and specs
+- `UWBParserThread_Core_Documentation.pdf` — documentation for the UWB parser
+  thread / UWB tag serial interface (pairs with sample_code/uwb/UWBParserThread.py).
+
+### reference/qualifier_code/ — full qualifier scripts (see root CLAUDE.md)
+Key files: avoid.py, AvoidancePlanner.py, RRTStarPlanner.py, VelocityPlanner.py,
+PointCloudPlanner.py, GlobalMapper.py, Detector.py, drone_control.py,
+get_depth.py, depth_receiver.py, plus ~40 more utility/test scripts.
 
 ## Adding new reference files
 1. Drop files into: finals/reference/dump/
