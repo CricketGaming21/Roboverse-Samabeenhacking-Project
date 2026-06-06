@@ -1,34 +1,50 @@
-# Python cache
+# ── Python ────────────────────────────────────────────────
 __pycache__/
 *.pyc
 *.pyo
+*.pyd
 
-# YOLO model weights
+# ── YOLO / ML weights (too large for GitHub) ──────────────
 *.pt
 *.pth
-*.weights
 *.onnx
+*.rknn
 *.engine
+*.tflite
+*.weights
+finals/weights/
 
-# Image/video captures
+# ── Images / video / captures ─────────────────────────────
 captured_images/
 detected_images/
 detections/
 confirmed/
 confirmed_barrels/
-
-# Training data
 dataset_raw/
+*.jpg
+*.jpeg
+*.png
+*.mp4
+*.avi
+*.bag
 
-# Debug logs
+# ── Runtime logs (never commit) ───────────────────────────
 claude_debug/logs/
+finals/claude_debug/logs/
+*.log
 
-# JSON logs
-*.json
+# ── Runtime JSON logs ─────────────────────────────────────
+barrel_detections.json
+nav_status.json
 canister_log.txt
 
-# Jupyter checkpoints
+# ── Jupyter ───────────────────────────────────────────────
 .ipynb_checkpoints/
 
-# Environment
+# ── Secrets ───────────────────────────────────────────────
 .env
+*.env
+
+# ── OS ────────────────────────────────────────────────────
+.DS_Store
+Thumbs.db
