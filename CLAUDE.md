@@ -1,7 +1,7 @@
 # PX4 Drone Project — Claude Master Context
 
 ## Repo overview
-- GitHub: git@github.com:CricketGaming21/px4-drone-project.git
+- GitHub: git@github.com:CricketGaming21/Roboverse-Samabeenhacking-Project.git
 - `main` branch   → Qualifier code (complete, referenceable)
 - `finals` branch → Finals code (active development)
 
