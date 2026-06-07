@@ -145,27 +145,42 @@ class DroneAPI:
     # ------------------------------------------------------------------ #
 
     def get_obstacles(self, drone_id: int = 0) -> Obstacles:
-        """Five booleans from simulated IR/ToF barrier sensors."""
-        raise NotImplementedError
+        """Five booleans from simulated IR/ToF barrier sensors (coarse by
+        design — no distances). Below the min-altitude gate all report clear.
+        Empty Obstacles if no data (before connect). drone_id is ignored —
+        this instance is bound to one drone."""
+        if self._drone is None:
+            return Obstacles()
+        return _bridge.read_obstacles(self._reg, self._drone)
 
     def any_obstacle(self) -> bool:
-        raise NotImplementedError
+        if self._drone is None:
+            return False
+        return _bridge.read_obstacles(self._reg, self._drone).any
 
     def get_drone_status(self, drone_id: int = 0) -> Optional[int]:
-        """Raw status int; barrier bits: 0=forward 1=back 2=left 3=right 4=down."""
-        raise NotImplementedError
+        """Raw status int; barrier bits: 0=forward 1=back 2=left 3=right 4=down.
+        None if no data (before connect). drone_id is ignored."""
+        if self._drone is None:
+            return None
+        return _bridge.read_status(self._reg, self._drone)
 
     def set_barrier_mode(self, enabled: bool) -> CommandResult:
-        """Enable/disable the sim's automatic reflex avoidance."""
-        raise NotImplementedError
+        """Enable/disable firmware auto-avoid: a move into an obstacle stops
+        short (the goal fails with 'stopped short') instead of penetrating."""
+        self._require_connection()
+        return _bridge.set_barrier_mode(self._reg, self._drone, enabled)
 
     def set_avoidance_direction(self, direction: Direction, distance_cm: int = 0,
                                 barrier_mask: Union[BarrierMask, int] = BarrierMask.ALL,
                                 blocking: bool = True) -> CommandResult:
         """Conditional reflex: when a sensor in barrier_mask trips, move
         `direction` by distance_cm. Only fires when an obstacle is actually
-        detected."""
-        raise NotImplementedError
+        detected; distance_cm=0 disarms. The reflex step preempts whatever
+        goal is active (logged as a preemption)."""
+        self._require_connection()
+        return _bridge.set_avoidance(self._reg, self._drone, direction,
+                                     distance_cm, barrier_mask)
 
     # ------------------------------------------------------------------ #
     # Camera + video — §4.5

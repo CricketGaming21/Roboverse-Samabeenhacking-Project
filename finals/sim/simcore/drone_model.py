@@ -22,11 +22,11 @@ import threading
 import numpy as np
 import pybullet as p
 
-from pyhulax.core import (CommandResult, DroneState, Obstacles, Orientation,
-                          Vector3, VelocityLevel)
+from pyhulax.core import (BarrierMask, CommandResult, Direction, DroneState,
+                          Obstacles, Orientation, Vector3, VelocityLevel)
 from pyhulax.exceptions import LowBattery, NotReady, PyhulaxError
 
-from . import frames
+from . import frames, sensors
 from .log import get_logger
 
 # Goal deadline (sim seconds) = estimated duration * margin + base. Kinematics
@@ -48,6 +48,22 @@ def speed_to_mps(cfg, speed) -> float:
             f"invalid speed level {speed!r} — use VelocityLevel.SLOW/MEDIUM/"
             f"ZOOM/TURBO") from None
     return float(getattr(cfg.velocity_levels, name))
+
+
+def _mask_tripped(flags: Obstacles, mask: int) -> bool:
+    """Does any tripped sensor fall inside the armed BarrierMask?
+    (There is no UP sensor; BarrierMask.UP simply never trips.)"""
+    return bool(((mask & BarrierMask.FRONT) and flags.forward)
+                or ((mask & BarrierMask.BACK) and flags.back)
+                or ((mask & BarrierMask.LEFT) and flags.left)
+                or ((mask & BarrierMask.RIGHT) and flags.right)
+                or ((mask & BarrierMask.DOWN) and flags.down))
+
+
+def _flag_names(flags: Obstacles) -> str:
+    names = [n for n in ("forward", "back", "left", "right", "down")
+             if getattr(flags, n)]
+    return ",".join(names) or "none"
 
 
 class Goal:
@@ -105,6 +121,10 @@ class SimDrone:
         self._drift_std = float(cfg.position_drift.random_walk_std_mps)
         self._drift_rng = np.random.default_rng([cfg.meta.seed, 1000 + index])
         self.drift_err = np.zeros(3)      # world metres, estimate minus truth
+
+        # Reflexes (§4.4) — both route through the SAME committing executor.
+        self.barrier_mode = False         # firmware auto-avoid (stop short)
+        self.avoidance_rule = None        # (Direction, distance_m, mask) or None
 
     # ------------------------------------------------------------------ #
     # Goal installers — SIM THREAD ONLY (called via run_on_sim_thread).
@@ -186,6 +206,8 @@ class SimDrone:
             # Gaussian random walk: error std grows as std_mps * sqrt(t).
             self.drift_err += self._drift_rng.normal(
                 0.0, self._drift_std * math.sqrt(dt), 3)
+        if self.flying:
+            self._run_reflexes()  # may preempt or stop the active goal
 
         g = self.goal
         if g is None:
@@ -258,9 +280,9 @@ class SimDrone:
         return Orientation(yaw=yaw_deg, pitch=0.0, roll=0.0)
 
     def telemetry_altitude(self) -> float:
-        """Downward ToF, cm, from TRUE height above the (flat) floor.
-        Phase 4 replaces this with a real downward ray-cast."""
-        return (self.pos[2] - self._ground_z) * 100.0
+        """Downward ToF, cm: real ray-cast distance to whatever is below
+        (floor or obstacle top), from TRUE height — never from UWB."""
+        return sensors.altitude_cm(self._client, self.cfg, self)
 
     def telemetry_state(self) -> DroneState:
         return DroneState(
@@ -276,6 +298,85 @@ class SimDrone:
     def arena_position(self):
         """TRUE (north, east) metres — the UWB drop-in's ground truth."""
         return frames.world_to_arena(self.cfg, self.pos[0], self.pos[1])
+
+    # ------------------------------------------------------------------ #
+    # Barrier sensors + reflexes (§4.4) — SIM THREAD ONLY
+    # ------------------------------------------------------------------ #
+
+    def sense_obstacles(self) -> Obstacles:
+        """Fresh 5-direction barrier read (booleans only — coarse by design)."""
+        return sensors.barrier_flags(self._client, self.cfg, self)
+
+    def status_bitmask(self) -> int:
+        """Barrier bits: 0=forward 1=back 2=left 3=right 4=down."""
+        return sensors.bitmask(self.sense_obstacles())
+
+    def set_barrier_mode(self, enabled: bool) -> None:
+        self.barrier_mode = bool(enabled)
+
+    def set_avoidance_rule(self, direction, distance_cm, barrier_mask) -> None:
+        """Arm the conditional step reflex (distance_cm <= 0 disarms)."""
+        if distance_cm and float(distance_cm) > 0:
+            self.avoidance_rule = (Direction(int(direction)),
+                                   float(distance_cm) / 100.0,
+                                   int(barrier_mask))
+        else:
+            self.avoidance_rule = None
+
+    def _run_reflexes(self) -> None:
+        """Both reflexes route through the SAME committing executor — no
+        separate control path. The step reflex preempts via _install (logged);
+        barrier mode fails the active goal ('stopped short')."""
+        g = self.goal
+        barrier_watch = (self.barrier_mode and g is not None
+                         and g.target_pos is not None
+                         and g.kind not in ("land", "takeoff", "avoid_step"))
+        if self.avoidance_rule is None and not barrier_watch:
+            return
+        flags = self.sense_obstacles()
+        if not flags.any:
+            return
+
+        # 1) Explicit conditional reflex: fires only on an actual detection
+        #    in the armed mask; one step at a time (no re-fire mid-step).
+        if self.avoidance_rule is not None and (g is None
+                                                or g.kind != "avoid_step"):
+            direction, dist_m, mask = self.avoidance_rule
+            if _mask_tripped(flags, mask):
+                self._log.warning(
+                    "avoidance reflex tripped (%s) -> stepping %s %.0f cm",
+                    _flag_names(flags), direction.name, dist_m * 100)
+                vec = np.array(frames.body_direction_to_world(self.yaw,
+                                                              direction))
+                self._install(
+                    "avoid_step",
+                    target_pos=self._clamp_z(self.pos + vec * dist_m),
+                    speed_mps=speed_to_mps(self.cfg, VelocityLevel.ZOOM))
+                return
+
+        # 2) Firmware auto-avoid: stop short when a tripped sensor lies in
+        #    the direction of travel (landing/takeoff are never blocked).
+        g = self.goal
+        if (self.barrier_mode and g is not None and g.target_pos is not None
+                and g.kind not in ("land", "takeoff", "avoid_step")):
+            delta = g.target_pos - self.pos
+            dist = float(np.linalg.norm(delta))
+            if dist > 1e-9 and self._motion_blocked(delta / dist, flags):
+                self.goal = None
+                self._log.warning("barrier mode: %s stopped short (%s)",
+                                  g.kind, _flag_names(flags))
+                g.complete(False,
+                           f"{g.kind} stopped short by barrier (auto-avoid)")
+
+    def _motion_blocked(self, unit_world, flags: Obstacles) -> bool:
+        """Is a tripped sensor in the direction of travel? (world -> body)"""
+        c, s = math.cos(self.yaw), math.sin(self.yaw)
+        bx = c * unit_world[0] + s * unit_world[1]    # along the nose
+        by = -s * unit_world[0] + c * unit_world[1]   # toward body left
+        bz = unit_world[2]
+        return bool((bx > 0.3 and flags.forward) or (bx < -0.3 and flags.back)
+                    or (by > 0.3 and flags.left) or (by < -0.3 and flags.right)
+                    or (bz < -0.3 and flags.down))
 
     # ------------------------------------------------------------------ #
     # Internals

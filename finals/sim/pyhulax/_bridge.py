@@ -67,3 +67,25 @@ def read_altitude(reg, drone) -> float:
 
 def read_state(reg, drone):
     return reg.run_on_sim_thread(drone.telemetry_state)
+
+
+def read_obstacles(reg, drone):
+    return reg.run_on_sim_thread(drone.sense_obstacles)
+
+
+def read_status(reg, drone) -> int:
+    return reg.run_on_sim_thread(drone.status_bitmask)
+
+
+def set_barrier_mode(reg, drone, enabled: bool) -> CommandResult:
+    reg.run_on_sim_thread(lambda: drone.set_barrier_mode(enabled))
+    return CommandResult(True, f"barrier mode "
+                               f"{'enabled' if enabled else 'disabled'}")
+
+
+def set_avoidance(reg, drone, direction, distance_cm, barrier_mask) -> CommandResult:
+    reg.run_on_sim_thread(
+        lambda: drone.set_avoidance_rule(direction, distance_cm, barrier_mask))
+    armed = distance_cm and float(distance_cm) > 0
+    return CommandResult(True, "avoidance rule armed" if armed
+                               else "avoidance rule disarmed")
