@@ -10,6 +10,7 @@ preemptions ARE counted — a reflex interrupting a move is still a preempt).
 """
 
 import threading
+from collections import deque
 
 from .log import get_logger
 
@@ -24,6 +25,7 @@ class CommandMonitor:
         self._warn_preempt = bool(cfg.monitor.warn_on_preempt)
         self._lock = threading.Lock()
         self._last_cmd = {}      # drone_index -> sim time of last command
+        self._recent = {}        # drone_index -> deque[(sim_time, kind)]
         self.commands = {}       # drone_index -> total commands
         self.rate_warnings = {}  # drone_index -> too-fast re-command count
         self.preemptions = {}    # drone_index -> unfinished-goal preempts
@@ -32,6 +34,8 @@ class CommandMonitor:
         now = self._clock.now()
         with self._lock:
             self.commands[drone_index] = self.commands.get(drone_index, 0) + 1
+            self._recent.setdefault(
+                drone_index, deque(maxlen=20)).append((now, kind))
             last = self._last_cmd.get(drone_index)
             self._last_cmd[drone_index] = now
             too_fast = last is not None and (now - last) < self._min_interval
@@ -53,6 +57,11 @@ class CommandMonitor:
             self._log.warning(
                 "thrash: drone %d goal '%s' preempted by '%s' before it "
                 "finished", drone_index, old_kind, new_kind)
+
+    def recent_commands(self, drone_index: int) -> list:
+        """[(sim_time, kind)] for the most recent commands (read-only)."""
+        with self._lock:
+            return list(self._recent.get(drone_index, ()))
 
     def snapshot(self) -> dict:
         with self._lock:

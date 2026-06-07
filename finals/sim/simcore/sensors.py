@@ -45,30 +45,39 @@ def altitude_cm(client, cfg, drone) -> float:
     return (z - float(cfg.arena.origin[2])) * 100.0  # fallback: flat floor
 
 
+def barrier_rays(cfg, drone):
+    """[(direction_name, start_xyz, end_xyz)] for the 5 trigger rays.
+
+    Shared by barrier_flags and the read-only debug probe (simcore/debug.py)
+    so sensing and introspection can never disagree on the geometry.
+    """
+    sens = cfg.barrier_sensors
+    x, y, z = drone.pos
+    rays = []
+    for name, direction in _HORIZONTAL:
+        dx, dy, _ = frames.body_direction_to_world(drone.yaw, direction)
+        reach = float(getattr(sens.range_m, name))
+        rays.append((name,
+                     (x + dx * _RAY_START_OFFSET_M,
+                      y + dy * _RAY_START_OFFSET_M, z),
+                     (x + dx * reach, y + dy * reach, z)))
+    # Down barrier: short trigger ray (distinct from the long ToF ray above).
+    rays.append(("down", (x, y, z - _DOWN_START_OFFSET_M),
+                 (x, y, z - float(sens.range_m.down))))
+    return rays
+
+
 def barrier_flags(client, cfg, drone) -> Obstacles:
     """Fresh 5-direction barrier read for one drone (gated by min altitude)."""
     sens = cfg.barrier_sensors
     if altitude_cm(client, cfg, drone) / 100.0 < sens.min_altitude_m:
         return Obstacles()  # gate: sensors inert near the ground
-
-    x, y, z = drone.pos
-    starts, ends, names = [], [], []
-    for name, direction in _HORIZONTAL:
-        dx, dy, _ = frames.body_direction_to_world(drone.yaw, direction)
-        reach = float(getattr(sens.range_m, name))
-        starts.append((x + dx * _RAY_START_OFFSET_M,
-                       y + dy * _RAY_START_OFFSET_M, z))
-        ends.append((x + dx * reach, y + dy * reach, z))
-        names.append(name)
-    # Down barrier: short trigger ray (distinct from the long ToF ray above).
-    starts.append((x, y, z - _DOWN_START_OFFSET_M))
-    ends.append((x, y, z - float(sens.range_m.down)))
-    names.append("down")
-
-    hits = p.rayTestBatch(starts, ends, physicsClientId=client)
+    rays = barrier_rays(cfg, drone)
+    hits = p.rayTestBatch([r[1] for r in rays], [r[2] for r in rays],
+                          physicsClientId=client)
     return Obstacles(**{
         name: bool(hit[0] >= 0 and hit[0] != drone.body_id)
-        for name, hit in zip(names, hits)
+        for (name, _s, _e), hit in zip(rays, hits)
     })
 
 

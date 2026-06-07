@@ -1,19 +1,53 @@
-"""Boot the sim world and let it run; optional live/top-down 2D view.
+"""Boot the sim world and let it run; optional live 2D / 3D / debug views.
 
 Usage (from the project root):
     python -m scripts.run_sim --seconds 2 --topdown out.png
-    python -m scripts.run_sim --live --seconds 30
-The live window is gated by config viz.enabled; --topdown always works
-(headless-safe Agg render).
+    python -m scripts.run_sim --live --seconds 30        # top-down 2D window
+    python -m scripts.run_sim --gui --seconds 30         # PyBullet 3D window
+    python -m scripts.run_sim --debug --dump run.jsonl   # introspection
+
+The live 2D window is gated by config viz.enabled; --topdown always works
+(headless-safe Agg render). --gui boots the world with p.connect(p.GUI)
+instead of the headless DIRECT+EGL default — orbit/pan/zoom via WSLg.
 """
 
 import argparse
+import os
+import sys
 import time
 
 from simcore.config import load_config
+from simcore.debug import start_debug_loop
 from simcore.log import get_logger
 from simcore.registry import SimRegistry
 from simcore.viz import TopDownView
+
+
+def open_camera_windows(cfg, log):
+    """viz.show_camera_windows debug view: one cv2 window per drone showing
+    its live camera stream (the frames detection actually sees)."""
+    if not (os.environ.get("DISPLAY") or os.environ.get("WAYLAND_DISPLAY")):
+        log.warning("show_camera_windows: no display; skipping")
+        return []
+    from pyhulax import DroneAPI
+    from pyhulax.video import VideoDisplay
+    pairs = []
+    for unit in cfg.drones.units:
+        d = DroneAPI()
+        d.connect(unit.ip)
+        d.set_video_stream(True)
+        stream = d.create_video_stream()
+        stream.start()
+        display = VideoDisplay(stream, window_name=f"hula {unit.ip}")
+        display.start()
+        pairs.append((stream, display))
+    return pairs
+
+
+def close_camera_windows(pairs):
+    for stream, display in pairs:
+        display.stop()
+        stream.stop()
 
 
 def main(argv=None) -> None:
@@ -30,12 +64,21 @@ def main(argv=None) -> None:
                     help="save the top-down 2D view to this PNG at the end")
     ap.add_argument("--live", action="store_true",
                     help="show the live top-down view (needs viz.enabled)")
+    ap.add_argument("--gui", action="store_true",
+                    help="boot with PyBullet's interactive 3D window instead "
+                         "of headless DIRECT (orbit/pan/zoom)")
+    ap.add_argument("--debug", action="store_true",
+                    help="print a read-only world snapshot once per sim second")
+    ap.add_argument("--dump", metavar="PATH", default=None,
+                    help="append per-tick JSON snapshots (JSON Lines) to PATH")
     args = ap.parse_args(argv)
 
     cfg = load_config(args.config)
     log = get_logger("run_sim", cfg)
-    reg = SimRegistry(cfg)
+    reg = SimRegistry(cfg, gui=args.gui)
     view = TopDownView(reg)
+    stop_debug = None
+    cams = []
     try:
         b = reg.bodies
         log.info("running: floor=1 walls=%d obstacles=%d drones=%d rovers=%d "
@@ -44,6 +87,11 @@ def main(argv=None) -> None:
                  "on" if reg.referee else "off")
         log.info("note: run_sim observes a static-drone world (score stays "
                  "0); use smoke_test to see the scored canned flight")
+        if args.debug or args.dump:
+            stop_debug = start_debug_loop(reg, print_text=args.debug,
+                                          dump_path=args.dump)
+        if cfg.viz.show_camera_windows:
+            cams = open_camera_windows(cfg, log)
         view.start_sampling()
         if args.live and cfg.viz.enabled:
             if not view.run_live(args.seconds):
@@ -63,8 +111,18 @@ def main(argv=None) -> None:
             print(reg.referee.format_scoreboard())
         print(reg.monitor.format_report())
     finally:
+        close_camera_windows(cams)
+        if stop_debug:
+            stop_debug()
         view.stop()
         reg.shutdown()
+    if args.gui:
+        # The GUI client is left connected (closing it from a worker thread
+        # segfaults under WSLg) and crashes interpreter teardown; all output
+        # is flushed and the sim is shut down — exit hard with success.
+        sys.stdout.flush()
+        sys.stderr.flush()
+        os._exit(0)
 
 
 if __name__ == "__main__":

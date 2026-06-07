@@ -220,13 +220,15 @@ class TopDownView:
         fig.savefig(path, dpi=110, bbox_inches="tight")
         self._log.info("top-down view saved to %s", path)
 
-    def run_live(self, duration_s=None) -> bool:
+    def run_live(self, duration_s=None, until=None) -> bool:
         """Interactive updating window. MAIN THREAD ONLY (matplotlib GUI).
 
         Selects a real GUI backend at runtime (Agg cannot display — its
         plt.pause() is a non-interactive no-op). Returns False, after logging
         a clear reason, when no display / GUI backend is usable so callers
-        can fall back to headless running + --topdown.
+        can fall back to headless running + --topdown. `until` is an optional
+        zero-arg callable; the loop also exits once it returns True (e.g. a
+        background canned flight finishing).
         """
         ok, detail = _select_interactive_backend(self._log)
         if not ok:
@@ -240,6 +242,7 @@ class TopDownView:
         end = None if duration_s is None else time.time() + duration_s
         try:
             while ((end is None or time.time() < end)
+                   and (until is None or not until())
                    and plt.fignum_exists(fig.number)
                    and self._reg.is_alive()):
                 self._draw(ax)

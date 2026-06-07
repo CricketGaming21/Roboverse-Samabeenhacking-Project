@@ -37,8 +37,9 @@ class SimRegistry:
     Constructing one boots the world (on the sim thread) and starts stepping.
     """
 
-    def __init__(self, config: SimConfig = None) -> None:
+    def __init__(self, config: SimConfig = None, gui: bool = False) -> None:
         self.config = config if config is not None else load_config()
+        self.gui = bool(gui)         # fixed at boot: p.GUI window vs DIRECT
         self._log = get_logger("registry", self.config)
         self.clock = SimClock()
         self.client = None           # pybullet client id (set on sim thread)
@@ -204,10 +205,35 @@ class SimRegistry:
 
     def _boot(self) -> None:
         cfg = self.config
-        self.client = p.connect(p.DIRECT)
-        if self.client < 0:
-            raise RuntimeError("pybullet DIRECT connect failed")
-        self._load_egl()
+        if self.gui:
+            # Interactive 3D window (orbit/pan/zoom). The GUI provides its
+            # own hardware GL, so the EGL plugin is skipped — EGL belongs to
+            # the headless DIRECT default, which stays byte-for-byte as-is.
+            self.client = p.connect(p.GUI)
+            if self.client < 0:
+                raise RuntimeError("pybullet GUI connect failed — no usable "
+                                   "display? run without --gui")
+            p.configureDebugVisualizer(p.COV_ENABLE_GUI, 0,
+                                       physicsClientId=self.client)
+            cx, cy, _ = frames.arena_to_world(cfg, cfg.arena.length_m / 2,
+                                              cfg.arena.width_m / 2, 0.0)
+            p.resetDebugVisualizerCamera(
+                cameraDistance=0.9 * max(cfg.arena.length_m,
+                                         cfg.arena.width_m),
+                cameraYaw=-90.0, cameraPitch=-55.0,
+                cameraTargetPosition=[cx, cy, 0.5],
+                physicsClientId=self.client)
+            # Camera frames (referee/streams) use the CPU TinyRenderer in
+            # GUI mode: hardware getCameraImage from the sim thread races
+            # the GUI's own render thread and segfaults (observed on
+            # WSLg/D3D12). GUI is a human-speed viewing mode — run it near
+            # real time; the headless DIRECT+EGL path is unchanged.
+            self.renderer = p.ER_TINY_RENDERER
+        else:
+            self.client = p.connect(p.DIRECT)
+            if self.client < 0:
+                raise RuntimeError("pybullet DIRECT connect failed")
+            self._load_egl()
         p.setGravity(0.0, 0.0, cfg.physics.gravity_mps2,
                      physicsClientId=self.client)
         p.setTimeStep(cfg.physics.dt_s, physicsClientId=self.client)
@@ -239,7 +265,8 @@ class SimRegistry:
             cfg.meta.seed, cfg.meta.real_time_factor, self.bodies.total,
             len(self.bodies.obstacles), len(self.bodies.drones),
             len(self.bodies.rovers),
-            "EGL/GPU" if self._egl_plugin >= 0 else "TinyRenderer")
+            "GUI/GL" if self.gui
+            else ("EGL/GPU" if self._egl_plugin >= 0 else "TinyRenderer"))
 
     def _load_egl(self) -> None:
         """Load the EGL hardware-render plugin by RESOLVED FILE PATH (§3).
@@ -339,7 +366,12 @@ class SimRegistry:
         self._fail_pending_calls()
         if self._egl_plugin >= 0:
             p.unloadPlugin(self._egl_plugin, physicsClientId=self.client)
-        p.disconnect(physicsClientId=self.client)
+        if not self.gui:
+            p.disconnect(physicsClientId=self.client)
+        # GUI clients are deliberately left for process exit to reap:
+        # tearing the GUI window down via p.disconnect from a worker thread
+        # segfaults (observed on WSLg/D3D12), and --gui is only used by
+        # short-lived CLI runs.
 
 
 # --------------------------------------------------------------------------- #
@@ -351,12 +383,16 @@ _registry = None
 _registry_lock = threading.Lock()
 
 
-def get_registry(config: SimConfig = None) -> SimRegistry:
-    """Return the shared world, creating it from config on first use."""
+def get_registry(config: SimConfig = None, gui: bool = False) -> SimRegistry:
+    """Return the shared world, creating it from config on first use.
+
+    gui only applies at creation time (the connection mode is fixed at
+    p.connect); it is ignored when the world already exists.
+    """
     global _registry
     with _registry_lock:
         if _registry is None:
-            _registry = SimRegistry(config)
+            _registry = SimRegistry(config, gui=gui)
         return _registry
 
 

@@ -143,6 +143,28 @@ consecutive frames. Score = distinct ids banked; the scoreboard records which
 drone banked each id and when (sim time). The same gate scores pads and
 rovers.
 
+## Watching the sim (three views) + debugging
+
+- **Top-down 2D** — `python -m scripts.run_sim --live` or
+  `python -m scripts.smoke_test --live` (the canned flight scoring in real
+  time): map with drones+paths, rovers, pads, coverage, banked ids, score.
+  Needs a GUI matplotlib backend (e.g. `sudo apt install python3-tk`).
+- **Per-drone cameras** — set `viz.show_camera_windows: true` and run
+  `run_sim`: one cv2 window per drone with the live frames detection sees
+  (or attach `pyhulax.video.VideoDisplay` to any stream yourself).
+- **3D world** — add `--gui` to `run_sim`/`smoke_test`: PyBullet's
+  interactive window (orbit/pan/zoom via WSLg) showing wall/obstacle
+  heights, drones at altitude, rovers. Headless DIRECT+EGL stays the
+  default; `--gui` only changes the connection mode at boot.
+
+`simcore/debug.py` (`DebugProbe`, plus `--debug` / `--dump file.jsonl` on
+both scripts) is a READ-ONLY sim-internal introspection tool for tests and
+debug scripts: per-tick drone pose in all frames (true vs drifting
+estimate), goals, barrier rays, rover waypoints, why each marker id is/isn't
+scoring, and command-rate stats — as a plain dict / JSON Lines. It never
+mutates anything and is **never imported by mission code** (it is not
+reachable through pyhulax).
+
 ## Notes
 
 - Everything is headless-safe: tests, smoke run, and `--topdown` PNGs need no
