@@ -185,6 +185,9 @@ viz:
   enabled: true            # set false for headless/batch/CI
   fps: 15
   show_camera_windows: false  # debug: also cv2.imshow each drone's frame
+  show_camera_fov: true    # draw each drone's camera footprint (top-down + 3D).
+                           # The footprint TILTS with set_camera_angle (pitch);
+                           # its angular size is FIXED by the lens — no zoom.
 
 # --- Command-rate / thrash monitor -------------------------------------------
 monitor:

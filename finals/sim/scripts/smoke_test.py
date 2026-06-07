@@ -64,10 +64,15 @@ def run_smoke(cfg, verbose: bool = False, topdown_png: str = None,
     reg = get_registry(cfg, gui=gui)
     view = TopDownView(reg)
     stop_debug = None
+    cams = []
     try:
         if debug or dump_path:
             stop_debug = start_debug_loop(reg, print_text=debug,
                                           dump_path=dump_path)
+        if cfg.viz.show_camera_windows:
+            from scripts.run_sim import open_camera_windows
+            from simcore.log import get_logger
+            cams = open_camera_windows(cfg, get_logger("smoke", cfg))
         view.start_sampling()
         if live:
             # The matplotlib window must own the MAIN thread, so the canned
@@ -116,6 +121,9 @@ def run_smoke(cfg, verbose: bool = False, topdown_png: str = None,
                   f"scenario phase: {reg.scenario.phase}")
         return result
     finally:
+        if cams:
+            from scripts.run_sim import close_camera_windows
+            close_camera_windows(cams)
         if stop_debug:
             stop_debug()
         view.stop()

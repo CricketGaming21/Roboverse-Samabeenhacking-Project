@@ -140,6 +140,43 @@ def camera_eye_target_up(cfg, pos, yaw_rad: float, pitch_deg: float):
     return eye, target, up
 
 
+def camera_ground_footprint(cfg, pos, yaw_rad: float, pitch_deg: float,
+                            max_range_m: float = None):
+    """Project the camera frustum onto the ground as a quad of world (x, y).
+
+    Built from the SAME pose+pitch geometry the render uses
+    (camera_eye_target_up) and the same h_fov/aspect maths as
+    camera.projection_matrix — one source of truth. Corner order:
+    bottom-left, bottom-right, top-right, top-left of the image.
+
+    Rays that never reach the ground (camera pitched at/above the horizon)
+    are capped at max_range_m (default config camera.far_m). PITCH moves and
+    tilts the footprint; its ANGULAR size is fixed by the lens FOV — the
+    Hula has no zoom, so nothing here (or anywhere) shrinks/grows it.
+    """
+    cam = cfg.camera
+    eye, target, up = camera_eye_target_up(cfg, pos, yaw_rad, pitch_deg)
+    fwd = (target[0] - eye[0], target[1] - eye[1], target[2] - eye[2])  # unit
+    right = (fwd[1] * up[2] - fwd[2] * up[1],
+             fwd[2] * up[0] - fwd[0] * up[2],
+             fwd[0] * up[1] - fwd[1] * up[0])
+    tan_h = math.tan(math.radians(cam.h_fov_deg) / 2.0)
+    tan_v = tan_h * cam.height / cam.width   # same aspect derivation as render
+    rng = float(max_range_m if max_range_m is not None else cam.far_m)
+    ground_z = float(cfg.arena.origin[2])
+    corners = []
+    for sv, sh in ((-1, -1), (-1, 1), (1, 1), (1, -1)):
+        d = tuple(fwd[i] + sh * tan_h * right[i] + sv * tan_v * up[i]
+                  for i in range(3))
+        t_cap = rng / math.sqrt(d[0] ** 2 + d[1] ** 2 + d[2] ** 2)
+        if d[2] < -1e-9:
+            t = min((ground_z - eye[2]) / d[2], t_cap)
+        else:
+            t = t_cap  # at/above the horizon: clip at the far range
+        corners.append((eye[0] + d[0] * t, eye[1] + d[1] * t))
+    return corners
+
+
 _BODY_DIRS = {
     Direction.FORWARD: (1.0, 0.0, 0.0),
     Direction.BACK: (-1.0, 0.0, 0.0),

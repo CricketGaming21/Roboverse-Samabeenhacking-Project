@@ -17,6 +17,7 @@ import time
 import numpy as np
 from matplotlib.backends.backend_agg import FigureCanvasAgg
 from matplotlib.figure import Figure
+from matplotlib.patches import Polygon as MplPolygon
 from matplotlib.patches import Rectangle
 
 from . import frames
@@ -25,6 +26,8 @@ from .log import get_logger
 _CELL_M = 0.25          # coverage grid pitch
 _PATH_MIN_STEP_M = 0.02  # path decimation
 _DRONE_COLORS = ("tab:blue", "tab:orange", "tab:purple")
+_FOV_VIZ_RANGE_M = 8.0  # cap forward-looking footprints so the map stays readable
+_GUI_LINE_COLORS = ((0.1, 0.3, 0.9), (1.0, 0.5, 0.1), (0.6, 0.2, 0.8))
 
 # GUI backends tried (in order) for the live window only. The headless/PNG
 # path never touches the global backend: render_png draws straight onto its
@@ -76,6 +79,8 @@ class TopDownView:
         nn = int(math.ceil(cfg.arena.length_m / _CELL_M))
         ne = int(math.ceil(cfg.arena.width_m / _CELL_M))
         self._covered = np.zeros((nn, ne), dtype=bool)
+        self._show_fov = bool(cfg.viz.show_camera_fov)
+        self._gui_lines = {}  # drone index -> [8 debug-line ids] (GUI mode)
         self._stop = threading.Event()
         self._thread = None
 
@@ -89,12 +94,24 @@ class TopDownView:
 
         def _read():
             ds = []
-            for d in reg.drones:
+            for i, d in enumerate(reg.drones):
                 n, e = d.arena_position()
                 n2, e2 = frames.world_to_arena(
                     cfg, d.pos[0] + math.cos(d.yaw) * 0.5,
                     d.pos[1] + math.sin(d.yaw) * 0.5)
-                ds.append((n, e, n2 - n, e2 - e, d.flying, float(d.pos[2])))
+                footprint = None
+                if self._show_fov and d.flying:
+                    # SAME pose+pitch geometry as the camera render —
+                    # tilts live with set_camera_angle; size fixed (no zoom).
+                    corners_w = frames.camera_ground_footprint(
+                        cfg, d.pos, d.yaw, d.camera_pitch_deg,
+                        max_range_m=_FOV_VIZ_RANGE_M)
+                    footprint = [frames.world_to_arena(cfg, x, y)
+                                 for x, y in corners_w]
+                    if reg.gui:  # 3D frustum lines (sim thread: safe here)
+                        self._draw_gui_frustum(i, d, corners_w)
+                ds.append((n, e, n2 - n, e2 - e, d.flying, float(d.pos[2]),
+                           footprint))
             return ds, [r.arena_position() for r in reg.rovers], \
                 reg.clock.now()
         try:
@@ -106,7 +123,7 @@ class TopDownView:
             self._sim_time = now
             for i, st in enumerate(drones):
                 self._latest[i] = st
-                n, e, _, _, flying, alt = st
+                n, e, _, _, flying, alt, _fp = st
                 if not flying:
                     continue
                 path = self._paths[i]
@@ -139,6 +156,27 @@ class TopDownView:
         self._stop.set()
         if self._thread is not None:
             self._thread.join(timeout=2)
+
+    def _draw_gui_frustum(self, idx, drone, corners_w) -> None:
+        """Refresh the 3D frustum debug lines for one drone. SIM THREAD ONLY
+        (called inside the sample closure); GUI mode only."""
+        import pybullet as p
+        cfg = self._cfg
+        eye, _t, _u = frames.camera_eye_target_up(
+            cfg, drone.pos, drone.yaw, drone.camera_pitch_deg)
+        gz = float(cfg.arena.origin[2]) + 0.01
+        c3 = [(x, y, gz) for x, y in corners_w]
+        color = _GUI_LINE_COLORS[idx % len(_GUI_LINE_COLORS)]
+        segments = [(eye, c3[0]), (eye, c3[1]), (eye, c3[2]), (eye, c3[3]),
+                    (c3[0], c3[1]), (c3[1], c3[2]), (c3[2], c3[3]),
+                    (c3[3], c3[0])]
+        ids = self._gui_lines.setdefault(idx, [-1] * 8)
+        for k, (a, b) in enumerate(segments):
+            kwargs = dict(lineColorRGB=list(color), lineWidth=1.5,
+                          lifeTime=0, physicsClientId=self._reg.client)
+            if ids[k] >= 0:
+                kwargs["replaceItemUniqueId"] = ids[k]
+            ids[k] = p.addUserDebugLine(list(a), list(b), **kwargs)
 
     def _sample_loop(self) -> None:
         period = 1.0 / float(self._cfg.viz.fps)
@@ -210,7 +248,11 @@ class TopDownView:
                 ax.plot([p[1] for p in path], [p[0] for p in path],
                         color=c, lw=1.2, alpha=0.8, zorder=5)
             if st is not None:
-                n, e, dn, de, flying, _alt = st
+                n, e, dn, de, flying, _alt, fp = st
+                if fp:  # camera footprint: moves/tilts live with the pitch
+                    ax.add_patch(MplPolygon([(pe, pn) for pn, pe in fp],
+                                            closed=True, fc=c, ec=c,
+                                            alpha=0.15, lw=1.0, zorder=4))
                 rot = -math.degrees(math.atan2(de, dn))  # 0 = pointing north
                 ax.plot(e, n, marker=(3, 0, rot), ms=12, color=c, zorder=6)
                 ax.annotate(f"d{i}", (e + 0.12, n + 0.12), color=c,

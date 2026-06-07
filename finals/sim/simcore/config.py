@@ -286,6 +286,7 @@ class VizConfig:
     enabled: bool = True
     fps: int = 15
     show_camera_windows: bool = False
+    show_camera_fov: bool = True      # draw each drone's camera ground footprint
 
 
 @dataclass
