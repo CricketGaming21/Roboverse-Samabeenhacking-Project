@@ -287,6 +287,7 @@ class VizConfig:
     fps: int = 15
     show_camera_windows: bool = False
     show_camera_fov: bool = True      # draw each drone's camera ground footprint
+    show_proximity: bool = True       # car-sensor obstacle display per drone
 
 
 @dataclass

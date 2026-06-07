@@ -13,6 +13,8 @@ all barriers report clear — like the real sensors, which need ~0.35 m to work.
 ALL functions here are SIM-THREAD ONLY (they call pybullet).
 """
 
+import math
+
 import pybullet as p
 
 from pyhulax.core import Direction, Obstacles
@@ -79,6 +81,28 @@ def barrier_flags(client, cfg, drone) -> Obstacles:
         name: bool(hit[0] >= 0 and hit[0] != drone.body_id)
         for (name, _s, _e), hit in zip(rays, hits)
     })
+
+
+def barrier_distances(client, cfg, drone) -> dict:
+    """OBSERVER-ONLY ground truth: actual ray distance to the first hit per
+    barrier direction. {name: {"distance_m": float|None, "range_m": float}}
+    (None = clear within the trigger ray; raw — no min-altitude gate).
+
+    Read by the debug probe and the proximity HUD only. NEVER exposed
+    through pyhulax: get_obstacles() keeps returning the five booleans, and
+    nothing distance-shaped exists on the public surface. SIM THREAD ONLY.
+    """
+    rays = barrier_rays(cfg, drone)
+    hits = p.rayTestBatch([r[1] for r in rays], [r[2] for r in rays],
+                          physicsClientId=client)
+    out = {}
+    for (name, start, end), hit in zip(rays, hits):
+        distance = None
+        if hit[0] >= 0 and hit[0] != drone.body_id:
+            distance = math.dist(start, hit[3])
+        out[name] = {"distance_m": distance,
+                     "range_m": math.dist(start, end)}
+    return out
 
 
 def bitmask(obstacles: Obstacles) -> int:

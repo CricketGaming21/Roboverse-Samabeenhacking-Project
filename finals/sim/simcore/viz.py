@@ -17,10 +17,11 @@ import time
 import numpy as np
 from matplotlib.backends.backend_agg import FigureCanvasAgg
 from matplotlib.figure import Figure
+from matplotlib.patches import Circle
 from matplotlib.patches import Polygon as MplPolygon
-from matplotlib.patches import Rectangle
+from matplotlib.patches import Rectangle, Wedge
 
-from . import frames
+from . import frames, sensors
 from .log import get_logger
 
 _CELL_M = 0.25          # coverage grid pitch
@@ -28,6 +29,20 @@ _PATH_MIN_STEP_M = 0.02  # path decimation
 _DRONE_COLORS = ("tab:blue", "tab:orange", "tab:purple")
 _FOV_VIZ_RANGE_M = 8.0  # cap forward-looking footprints so the map stays readable
 _GUI_LINE_COLORS = ((0.1, 0.3, 0.9), (1.0, 0.5, 0.1), (0.6, 0.2, 0.8))
+
+# Car-sensor proximity bands (observer-only ground truth; pyhulax still
+# returns only booleans). A hit in the closest 45% of the ray reads red.
+_RED_FRACTION = 0.45
+_BAND_COLORS = {"green": "limegreen", "amber": "orange", "red": "red"}
+_PROX_LABELS = (("forward", "FWD", 0.0), ("left", "LFT", 90.0),
+                ("back", "BCK", 180.0), ("right", "RGT", -90.0))
+
+
+def proximity_band(distance_m, range_m) -> str:
+    """green (clear) -> amber (detected) -> red (close), like a car sensor."""
+    if distance_m is None:
+        return "green"
+    return "red" if distance_m <= _RED_FRACTION * range_m else "amber"
 
 # GUI backends tried (in order) for the live window only. The headless/PNG
 # path never touches the global backend: render_png draws straight onto its
@@ -80,7 +95,9 @@ class TopDownView:
         ne = int(math.ceil(cfg.arena.width_m / _CELL_M))
         self._covered = np.zeros((nn, ne), dtype=bool)
         self._show_fov = bool(cfg.viz.show_camera_fov)
+        self._show_prox = bool(cfg.viz.show_proximity)
         self._gui_lines = {}  # drone index -> [8 debug-line ids] (GUI mode)
+        self._gui_prox_text = {}  # drone index -> debug-text id (GUI mode)
         self._stop = threading.Event()
         self._thread = None
 
@@ -110,8 +127,14 @@ class TopDownView:
                                  for x, y in corners_w]
                     if reg.gui:  # 3D frustum lines (sim thread: safe here)
                         self._draw_gui_frustum(i, d, corners_w)
+                prox = None
+                if self._show_prox and d.flying:
+                    # OBSERVER-ONLY ray distances (never via pyhulax)
+                    prox = sensors.barrier_distances(reg.client, cfg, d)
+                    if reg.gui:
+                        self._draw_gui_proximity(i, d, prox)
                 ds.append((n, e, n2 - n, e2 - e, d.flying, float(d.pos[2]),
-                           footprint))
+                           footprint, prox))
             return ds, [r.arena_position() for r in reg.rovers], \
                 reg.clock.now()
         try:
@@ -123,7 +146,7 @@ class TopDownView:
             self._sim_time = now
             for i, st in enumerate(drones):
                 self._latest[i] = st
-                n, e, _, _, flying, alt, _fp = st
+                n, e, _, _, flying, alt, _fp, _prox = st
                 if not flying:
                     continue
                 path = self._paths[i]
@@ -156,6 +179,56 @@ class TopDownView:
         self._stop.set()
         if self._thread is not None:
             self._thread.join(timeout=2)
+
+    def _draw_proximity(self, ax, n, e, dn, de, prox) -> None:
+        """Parking-sensor wedges around the drone icon: forward/back/left/
+        right segments + a down dot, coloured by TRUE ray proximity."""
+        nose_deg = math.degrees(math.atan2(dn, de))  # plot angle of the nose
+        for name, label, offset in _PROX_LABELS:
+            info = prox[name]
+            band = proximity_band(info["distance_m"], info["range_m"])
+            ang = nose_deg + offset
+            ax.add_patch(Wedge((e, n), 0.55, ang - 28, ang + 28, width=0.16,
+                               fc=_BAND_COLORS[band], ec="none",
+                               alpha=0.9 if band != "green" else 0.35,
+                               zorder=5))
+            if band != "green":
+                lx = e + 0.85 * math.cos(math.radians(ang))
+                ly = n + 0.85 * math.sin(math.radians(ang))
+                ax.annotate(f"{label} {info['distance_m']:.1f} m", (lx, ly),
+                            ha="center", fontsize=7,
+                            color=_BAND_COLORS[band], zorder=7)
+        down = prox["down"]
+        band = proximity_band(down["distance_m"], down["range_m"])
+        ax.add_patch(Circle((e, n), 0.10, fc=_BAND_COLORS[band], ec="none",
+                            alpha=0.8 if band != "green" else 0.3, zorder=5))
+        if band != "green":
+            ax.annotate(f"DN {down['distance_m']:.1f} m", (e + 0.2, n - 0.3),
+                        fontsize=7, color=_BAND_COLORS[band], zorder=7)
+
+    def _draw_gui_proximity(self, idx, drone, prox) -> None:
+        """Compact HUD text above the drone in --gui. SIM THREAD ONLY."""
+        import pybullet as p
+        parts, worst = [], "green"
+        rank = {"green": 0, "amber": 1, "red": 2}
+        for key, letter in (("forward", "F"), ("back", "B"), ("left", "L"),
+                            ("right", "R"), ("down", "D")):
+            d_m = prox[key]["distance_m"]
+            parts.append(f"{letter}{d_m:.2f}" if d_m is not None
+                         else f"{letter}-")
+            band = proximity_band(d_m, prox[key]["range_m"])
+            if rank[band] > rank[worst]:
+                worst = band
+        color = {"green": (0.1, 0.7, 0.1), "amber": (1.0, 0.6, 0.0),
+                 "red": (1.0, 0.1, 0.1)}[worst]
+        pos = [drone.pos[0], drone.pos[1], drone.pos[2] + 0.25]
+        kwargs = dict(textColorRGB=list(color), textSize=1.1,
+                      lifeTime=0, physicsClientId=self._reg.client)
+        prev = self._gui_prox_text.get(idx, -1)
+        if prev >= 0:
+            kwargs["replaceItemUniqueId"] = prev
+        self._gui_prox_text[idx] = p.addUserDebugText(" ".join(parts), pos,
+                                                      **kwargs)
 
     def _draw_gui_frustum(self, idx, drone, corners_w) -> None:
         """Refresh the 3D frustum debug lines for one drone. SIM THREAD ONLY
@@ -248,11 +321,13 @@ class TopDownView:
                 ax.plot([p[1] for p in path], [p[0] for p in path],
                         color=c, lw=1.2, alpha=0.8, zorder=5)
             if st is not None:
-                n, e, dn, de, flying, _alt, fp = st
+                n, e, dn, de, flying, _alt, fp, prox = st
                 if fp:  # camera footprint: moves/tilts live with the pitch
                     ax.add_patch(MplPolygon([(pe, pn) for pn, pe in fp],
                                             closed=True, fc=c, ec=c,
                                             alpha=0.15, lw=1.0, zorder=4))
+                if prox:
+                    self._draw_proximity(ax, n, e, dn, de, prox)
                 rot = -math.degrees(math.atan2(de, dn))  # 0 = pointing north
                 ax.plot(e, n, marker=(3, 0, rot), ms=12, color=c, zorder=6)
                 ax.annotate(f"d{i}", (e + 0.12, n + 0.12), color=c,

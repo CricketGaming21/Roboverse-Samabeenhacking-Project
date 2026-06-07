@@ -188,6 +188,10 @@ viz:
   show_camera_fov: true    # draw each drone's camera footprint (top-down + 3D).
                            # The footprint TILTS with set_camera_angle (pitch);
                            # its angular size is FIXED by the lens — no zoom.
+  show_proximity: true     # car-sensor obstacle display per drone — OBSERVER
+                           # ONLY (sim ground truth); the mission still gets
+                           # just the blocked/clear booleans from get_obstacles
+
 
 # --- Command-rate / thrash monitor -------------------------------------------
 monitor:

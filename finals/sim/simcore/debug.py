@@ -84,6 +84,9 @@ class DebugProbe:
                 "start": _round3(start),
                 "end": _round3(end),
                 "hit_pos": _round3(hit[3]) if raw else None,
+                # observer-only truth (proximity HUD); never via pyhulax
+                "distance_m": round(math.dist(start, hit[3]), 3)
+                if raw else None,
             }
         return {"altitude_cm": round(float(alt_cm), 1), "gated": gated,
                 "rays": per}
