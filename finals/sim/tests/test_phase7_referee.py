@@ -21,7 +21,6 @@ from simcore.registry import get_registry, shutdown_registry
 from simcore.scoring import Referee
 from simcore.viz import TopDownView
 
-PAD0 = 10  # ids of the first two configured pads (positions from cfg.pads)
 
 
 @pytest.fixture()
@@ -30,7 +29,9 @@ def cfg():
     c.meta.real_time_factor = 10.0
     c.arena.layout = "procedural"  # authored map off: clean nadir views
     c.arena.obstacles.count = 0
-    c.rovers.count = 0
+    c.scenario.phases = "ambush"   # part-2 referee judges only in AMBUSH
+    c.rovers.motion = "patrol"
+    c.rovers.patrol.speed_mps = 0.0  # parked rover targets at their spawns
     return c
 
 
@@ -139,34 +140,34 @@ def test_explicit_capture_mode(sim, cfg):
 # --------------------------------------------------------------------------- #
 
 def test_held_centred_read_banks_once_across_drones(sim, cfg):
-    # NOTE: the flight paths may legitimately overfly OTHER pads en route
-    # (and bank them) — every assertion targets the specific id under test.
-    pad0, pad1 = cfg.pads[0], cfg.pads[1]
+    # Part-2 targets are the ROVER markers (parked at their spawns here).
+    (r0n, r0e), (r1n, r1e) = sim.rover_arena_positions()[:2]
+    id0, id1 = sim.rovers[0].marker_id, sim.rovers[1].marker_id
 
     def _record(marker_id):
         return next((b for b in sim.referee.banked()
                      if b.marker_id == marker_id), None)
 
     d0 = _connect(cfg, 0)
-    _hover_over(d0, cfg, 0, north=pad0.north, east=pad0.east)  # over pad 10
-    assert _wait_banked(sim, PAD0), "held centred read did not bank"
-    record = _record(PAD0)
+    _hover_over(d0, cfg, 0, north=r0n, east=r0e)   # over rover 0
+    assert _wait_banked(sim, id0), "held centred read did not bank"
+    record = _record(id0)
     assert record.drone_index == 0
     assert record.sim_time > 0
 
-    d1 = _connect(cfg, 1)                          # second drone, same pad
-    _hover_over(d1, cfg, 1, north=pad0.north, east=pad0.east)
+    d1 = _connect(cfg, 1)                          # second drone, same rover
+    _hover_over(d1, cfg, 1, north=r0n, east=r0e)
     d1.hover(1.0)                                  # plenty of held frames
-    records = [b for b in sim.referee.banked() if b.marker_id == PAD0]
+    records = [b for b in sim.referee.banked() if b.marker_id == id0]
     assert len(records) == 1                       # banked exactly once
     assert records[0].drone_index == 0             # attribution kept
 
-    assert _record(pad1.id) is None                # fresh target so far
+    assert _record(id1) is None                    # fresh target so far
     start1 = cfg.drones.units[1].start
-    d1.move_to((pad1.east - start1[1]) * 100.0,
-               (pad1.north - start1[0]) * 100.0 - 10.0, 150)
-    assert _wait_banked(sim, pad1.id), "drone 1 failed to bank a fresh id"
-    assert _record(pad1.id).drone_index == 1
+    d1.move_to((r1e - start1[1]) * 100.0,
+               (r1n - start1[0]) * 100.0 - 10.0, 150)
+    assert _wait_banked(sim, id1), "drone 1 failed to bank a fresh id"
+    assert _record(id1).drone_index == 1
 
 
 # --------------------------------------------------------------------------- #
@@ -220,13 +221,18 @@ def test_topdown_renders_png_headless(sim, cfg, tmp_path):
 
 
 def test_full_smoke_run_scores_and_reports_thrash():
-    c = load_config("sim_config.yaml")   # FULL world: obstacles + rovers
+    c = load_config("sim_config.yaml")   # FULL world: authored map + convoy
     c.meta.real_time_factor = 10.0
     result = run_smoke(c)
-    assert result["score"] >= 3          # the three pad overflights bank
-    ids = [b[0] for b in result["banked"]]
-    assert len(set(ids)) == len(ids)     # distinct ids only
-    assert {10, 11, 12} <= set(ids)
+    # Part 1: all three drones land on their designated pads within tolerance
+    assert result["landing_score"] == 3
+    pads = sorted(p for _d, p, _e, _t in result["landings"])
+    assert pads == [10, 11, 12]
+    assert all(err <= c.scoring.landing.tolerance_m
+               for _d, _p, err, _t in result["landings"])
+    # Part 2: pads NEVER count as snapshot targets
+    pad_ids = {p.id for p in c.pads}
+    assert not pad_ids & {b[0] for b in result["banked"]}
     assert sum(result["monitor"]["preemptions"].values()) >= 1  # thrash demo
     assert sum(result["monitor"]["rate_warnings"].values()) >= 1
     assert result["sim_time"] > 0

@@ -94,10 +94,11 @@ class SimDrone:
     """State + kinematic executor for one drone (sim-thread only mutation)."""
 
     def __init__(self, cfg, index, spec, body_id, client, clock,
-                 start_pos, start_yaw, monitor=None):
+                 start_pos, start_yaw, monitor=None, landing_scorer=None):
         self.cfg = cfg
         self.index = index
         self.monitor = monitor            # CommandMonitor (thrash watchdog)
+        self.landing_scorer = landing_scorer  # part-1 referee (DEPLOY)
         self.spec = spec                  # DroneSpec (ip, uwb_tag_id, ...)
         self.body_id = body_id
         self._client = client
@@ -256,6 +257,8 @@ class SimDrone:
             self.goal = None
             if g.kind == "land":
                 self.flying = False
+                if self.landing_scorer is not None:
+                    self.landing_scorer.record_landing(self)  # part-1 referee
             g.complete(True, f"{g.kind} complete")
 
     # ------------------------------------------------------------------ #

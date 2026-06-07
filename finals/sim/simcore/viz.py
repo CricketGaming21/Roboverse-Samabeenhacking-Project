@@ -161,7 +161,9 @@ class TopDownView:
             sim_t = self._sim_time
         banked = (self._reg.referee.banked_ids()
                   if self._reg.referee is not None else set())
-        score = len(banked)
+        ls = self._reg.landing_scorer
+        claimed = ls.claimed_ids() if ls is not None else set()
+        landings = ls.score() if ls is not None else 0
 
         ax.clear()
         ax.set_xlim(-0.4, W + 0.4)
@@ -185,8 +187,8 @@ class TopDownView:
         for pad in cfg.pads:
             valid = getattr(pad, "valid", True)
             designated = getattr(pad, "designated", True)
-            fc = "limegreen" if pad.id in banked else (
-                "white" if valid else "mistyrose")
+            fc = "limegreen" if pad.id in claimed else (
+                "white" if valid else "mistyrose")  # green = landing claimed
             ec = "black" if designated else ("dimgray" if valid else "red")
             ax.add_patch(Rectangle((pad.east - half, pad.north - half),
                                    2 * half, 2 * half, fc=fc, ec=ec,
@@ -215,8 +217,10 @@ class TopDownView:
                             fontsize=9, zorder=6)
 
         ids_txt = ",".join(str(i) for i in sorted(banked)) or "-"
-        ax.set_title(f"score {score}   banked [{ids_txt}]   "
-                     f"t={sim_t:.1f}s sim")
+        phase = (self._reg.scenario.phase
+                 if getattr(self._reg, "scenario", None) else "?")
+        ax.set_title(f"{phase.upper()}   P1 landings {landings}   "
+                     f"P2 rovers {len(banked)} [{ids_txt}]   t={sim_t:.1f}s")
 
     def render_png(self, path: str) -> None:
         """Draw the current state to a PNG — never needs a display."""

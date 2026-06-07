@@ -48,7 +48,8 @@ class SimRegistry:
         self.drones = []             # [SimDrone] (set during boot)
         self.rovers = []             # [SimRover] (set during boot)
         self.monitor = monitor.CommandMonitor(self.config, self.clock)
-        self.referee = None          # started after boot if scoring.enabled
+        self.referee = None          # part-2 referee (after boot, if enabled)
+        self.landing_scorer = scoring.LandingScorer(self)  # part-1 referee
         self.scenario = None         # episode state machine (set during boot)
         self.renderer = p.ER_TINY_RENDERER  # upgraded if the EGL plugin loads
         self._egl_plugin = -1
@@ -247,7 +248,7 @@ class SimRegistry:
                 clock=self.clock,
                 start_pos=frames.arena_to_world(cfg, pose.north, pose.east, hz),
                 start_yaw=frames.heading_to_world_yaw_rad(cfg, pose.heading_deg),
-                monitor=self.monitor)
+                monitor=self.monitor, landing_scorer=self.landing_scorer)
             for i, (spec, pose, bid) in enumerate(
                 zip(cfg.drones.units, self.layout.drone_starts,
                     self.bodies.drones))

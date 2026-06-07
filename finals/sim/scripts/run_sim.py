@@ -111,8 +111,8 @@ def main(argv=None) -> None:
         if args.topdown:
             view.sample()
             view.render_png(args.topdown)
-        if reg.referee is not None:
-            print(reg.referee.format_scoreboard())
+        from simcore.scoring import format_combined_scoreboard
+        print(format_combined_scoreboard(reg))
         print(reg.monitor.format_report())
     finally:
         close_camera_windows(cams)

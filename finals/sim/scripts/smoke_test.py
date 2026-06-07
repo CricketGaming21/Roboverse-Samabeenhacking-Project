@@ -26,6 +26,7 @@ from pyhulax.core import CameraPitchMode, Direction
 from simcore.config import load_config
 from simcore.debug import start_debug_loop
 from simcore.registry import get_registry, shutdown_registry
+from simcore.scoring import format_combined_scoreboard
 from simcore.viz import TopDownView
 
 
@@ -90,10 +91,15 @@ def run_smoke(cfg, verbose: bool = False, topdown_png: str = None,
                 raise errors[0]
         else:
             _fly_canned_pattern(cfg, verbose)
-        time.sleep(0.3)  # let the referee flush its last frames
+        time.sleep(0.3)  # let the referees flush
         banked = reg.referee.banked() if reg.referee else []
+        landings = reg.landing_scorer.results()
         result = {
-            "score": len(banked),
+            "landing_score": reg.landing_scorer.score(),
+            "landings": [(r.drone_index, r.pad_id, r.error_m, r.sim_time)
+                         for r in landings],
+            "landing_attempts": len(reg.landing_scorer.all_attempts()),
+            "snapshot_score": len(banked),
             "banked": [(b.marker_id, b.drone_index, b.sim_time)
                        for b in banked],
             "monitor": reg.monitor.snapshot(),
@@ -104,10 +110,10 @@ def run_smoke(cfg, verbose: bool = False, topdown_png: str = None,
             view.render_png(topdown_png)
         if verbose:
             print()
-            if reg.referee is not None:
-                print(reg.referee.format_scoreboard())
+            print(format_combined_scoreboard(reg))
             print(reg.monitor.format_report())
-            print(f"sim time: {result['sim_time']:.1f}s")
+            print(f"sim time: {result['sim_time']:.1f}s   "
+                  f"scenario phase: {reg.scenario.phase}")
         return result
     finally:
         if stop_debug:
@@ -143,11 +149,11 @@ def main(argv=None) -> None:
                        gui=args.gui, live=args.live, debug=args.debug,
                        dump_path=args.dump)
     preempts = sum(result["monitor"]["preemptions"].values())
-    ok = result["score"] > 0 and preempts > 0
+    ok = result["landing_score"] > 0 and preempts > 0
     if ok:
         print("SMOKE TEST PASSED")
     else:
-        print(f"SMOKE TEST FAILED (score={result['score']}, "
+        print(f"SMOKE TEST FAILED (landings={result['landing_score']}, "
               f"preemptions={preempts})")
     if args.gui:
         # See run_sim: the GUI client crashes interpreter teardown; output

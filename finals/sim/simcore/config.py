@@ -121,6 +121,7 @@ class DroneSpec:
     uwb_tag_id: int = 0
     start: list = field(default_factory=lambda: [0.6, 1.5])  # arena (north, east) m
     heading_deg: float = 0.0          # 0 = facing +north
+    pad_id: Optional[int] = None      # scoring.landing.assignment=fixed target
 
 
 @dataclass
@@ -263,12 +264,21 @@ class ScenarioConfig:
 
 
 @dataclass
+class LandingConfig:
+    """Part-1 referee: landing accuracy onto valid+designated pads (DEPLOY)."""
+    tolerance_m: float = 0.30         # touchdown within this of the pad centre
+    assignment: str = "nearest_unclaimed"  # nearest_unclaimed | fixed (units[].pad_id)
+    time_weighted: bool = True        # report/weight by time-to-land
+
+
+@dataclass
 class ScoringConfig:
-    enabled: bool = True              # run the referee thread with the world
+    enabled: bool = True              # run the part-2 referee thread with the world
     mode: str = "auto"                # auto = sustained-visibility; explicit = capture hook
     min_marker_px: int = 40
     frame_margin_px: int = 8
     hold_frames: int = 5
+    landing: LandingConfig = field(default_factory=LandingConfig)
 
 
 @dataclass

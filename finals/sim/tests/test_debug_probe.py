@@ -22,7 +22,10 @@ from simcore.registry import get_registry, shutdown_registry
 def cfg():
     c = load_config("sim_config.yaml")
     c.meta.real_time_factor = 10.0
+    c.arena.layout = "procedural"
     c.arena.obstacles.count = 0
+    c.scenario.phases = "ambush"     # part-2 referee judges only in AMBUSH
+    c.rovers.motion = "patrol"
     c.rovers.patrol.speed_mps = 0.0  # parked: stable read-only comparisons
     return c
 
@@ -37,13 +40,14 @@ def sim(cfg):
 def test_probe_snapshot_contents_and_json(sim, cfg):
     d = DroneAPI()
     d.connect(cfg.drones.units[0].ip)
-    pad = cfg.pads[0]
+    rn, re_ = sim.rover_arena_positions()[0]   # parked rover 0 (id 20)
+    rover_id = sim.rovers[0].marker_id
     start = cfg.drones.units[0].start
     d.takeoff(150)
     d.set_camera_angle(CameraPitchMode.DOWN_ABSOLUTE, 90)
-    d.move_to((pad.east - start[1]) * 100.0,
-              (pad.north - start[0]) * 100.0
-              - cfg.camera.mount_offset_m * 100, 150)  # over pad cfg.pads[0]
+    d.move_to((re_ - start[1]) * 100.0,
+              (rn - start[0]) * 100.0
+              - cfg.camera.mount_offset_m * 100, 150)  # camera over rover 0
     time.sleep(0.3)  # let the referee accumulate holds
 
     probe = DebugProbe(sim)
@@ -53,7 +57,7 @@ def test_probe_snapshot_contents_and_json(sim, cfg):
     d0 = snap["drones"][0]
     assert d0["flying"] is True and d0["connected"] is True
     assert abs(d0["true"]["world"][2] - 1.5) < 0.03
-    assert abs(d0["true"]["arena_ne_m"][0] - pad.north) < 0.15  # over the pad
+    assert abs(d0["true"]["arena_ne_m"][0] - rn) < 0.2  # over the rover
     assert d0["true"]["takeoff_cm"] is not None
     assert d0["estimate"]["takeoff_cm"] is not None
     assert d0["estimate"]["drift_error_m"] >= 0.0
@@ -62,16 +66,17 @@ def test_probe_snapshot_contents_and_json(sim, cfg):
     assert set(rays) == {"forward", "back", "left", "right", "down"}
     for r in rays.values():
         assert len(r["start"]) == 3 and len(r["end"]) == 3
-    assert abs(d0["sensors"]["altitude_cm"] - 150) < 3
+    # ToF ray lands on the rover's top face below the body (1.5 m - 0.27 m)
+    assert abs(d0["sensors"]["altitude_cm"] - 123) < 6
 
     # rovers: id + position (+ waypoint None while parked)
     assert [r["marker_id"] for r in snap["rovers"]] == \
         list(cfg.rovers.marker_ids)[:cfg.rovers.count]
     assert all(r["waypoint_arena_ne_m"] is None for r in snap["rovers"])
 
-    # referee: WHY pad 10 is scoring — size, frame, hold, banked
-    info = snap["referee"]["per_drone"][0].get(pad.id)
-    assert info is not None, f"probe referee view should see pad {pad.id}"
+    # referee: WHY rover 0 is scoring — size, frame, hold, banked
+    info = snap["referee"]["per_drone"][0].get(rover_id)
+    assert info is not None, f"probe referee view should see id {rover_id}"
     assert info["side_px"] >= cfg.scoring.min_marker_px
     assert info["fully_in_frame"] and info["gate_ok"]
     assert info["hold"] >= 1

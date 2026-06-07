@@ -167,12 +167,18 @@ rovers:
     bounds_north: [1.0, 9.0]         # keep rovers off the walls
     bounds_east: [1.0, 5.0]
 
-# --- Scoring (referee, sim-side) ---------------------------------------------
+# --- Scoring (two referees, sim-side) ----------------------------------------
+# Part 1 (DEPLOY): landing accuracy. Part 2 (AMBUSH): rover snapshots only —
+# pads never count as part-2 targets.
 scoring:
   mode: auto               # auto = sustained-visibility; explicit = deliberate-capture hook
   min_marker_px: 40        # apparent marker side must be >= this (close/clear enough)
   frame_margin_px: 8       # marker must sit this far inside the frame edges
   hold_frames: 5           # consecutive frames the same drone must hold a valid read
+  landing:                 # part-1 referee (landings during DEPLOY)
+    tolerance_m: 0.30      # touchdown within this of a designated pad centre
+    assignment: nearest_unclaimed   # nearest_unclaimed | fixed (drones.units[].pad_id)
+    time_weighted: true    # report/weight by time-to-land
 
 # --- Top-down live view ------------------------------------------------------
 viz:
