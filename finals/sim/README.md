@@ -7,7 +7,10 @@ configured coordinates, 5 patrolling ArUco-tagged rovers, barrier sensors, a
 referee that scores what the drone cameras actually see, a thrash monitor,
 and a live top-down view.
 
-**Status: complete (Phases 0–8 per `HULA_SIM_BUILD_PLAN.md`).**
+**Status: complete — Phases 0–8 (`HULA_SIM_BUILD_PLAN.md`) + the part-2
+scenario, Phases 9–15 (`SIM_UPDATE_PART2.md`): authored map, two-phase
+DEPLOY→AMBUSH episode, rover convoy, two-part scoring, FOV/proximity views,
+and `python -m scripts.scenario_demo` to watch the whole thing.**
 
 ## Install
 
