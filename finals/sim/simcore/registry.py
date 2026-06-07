@@ -305,6 +305,7 @@ class SimRegistry:
         wall_per_step = dt / rtf
         anchor = time.perf_counter()  # wall instant where sim step 0 is due
         steps = 0
+        lag_warned = False  # first lag is a warning, repeats go to debug
 
         while not self._stop.is_set():
             self._drain_calls()
@@ -318,9 +319,12 @@ class SimRegistry:
                     self._stop.wait(min(delay, 0.05))
                 continue
             if behind > max_catchup * 10:
-                self._log.warning(
-                    "sim thread fell %d steps behind; re-anchoring "
-                    "(real_time_factor %.2f may be too high)", behind, rtf)
+                log_fn = self._log.debug if lag_warned else self._log.warning
+                log_fn("sim thread fell %d steps behind; re-anchoring (heavy "
+                       "rendering or real_time_factor %.2f too high for this "
+                       "machine — sim-time semantics are unaffected)",
+                       behind, rtf)
+                lag_warned = True
                 anchor = time.perf_counter() - steps * wall_per_step
                 continue
             for _ in range(min(behind, max_catchup)):
