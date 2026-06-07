@@ -17,7 +17,11 @@ from simcore.viz import TopDownView
 
 
 def main(argv=None) -> None:
-    ap = argparse.ArgumentParser(description="Boot and step the Hula sim world")
+    ap = argparse.ArgumentParser(
+        description="Boot and step the Hula sim world",
+        epilog="NOTE: run_sim observes a STATIC-DRONE world — nothing flies, "
+               "so the score stays 0 by design. Use `python -m "
+               "scripts.smoke_test` to see the scored canned flight.")
     ap.add_argument("--config", default=None,
                     help="config YAML (default: $HULA_SIM_CONFIG or ./sim_config.yaml)")
     ap.add_argument("--seconds", type=float, default=2.0,
@@ -38,9 +42,14 @@ def main(argv=None) -> None:
                  "pads=%d referee=%s", len(b.walls), len(b.obstacles),
                  len(b.drones), len(b.rovers), len(b.pads),
                  "on" if reg.referee else "off")
+        log.info("note: run_sim observes a static-drone world (score stays "
+                 "0); use smoke_test to see the scored canned flight")
         view.start_sampling()
         if args.live and cfg.viz.enabled:
-            view.run_live(args.seconds)
+            if not view.run_live(args.seconds):
+                log.warning("no display; use --topdown for a PNG — running "
+                            "headless for %.1fs instead", args.seconds)
+                time.sleep(max(0.0, args.seconds))
         else:
             if args.live:
                 log.warning("--live requested but viz.enabled is false")

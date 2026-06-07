@@ -10,6 +10,7 @@ auto/live view in run_sim; explicit render_png calls always work.
 """
 
 import math
+import os
 import threading
 import time
 
@@ -24,6 +25,38 @@ from .log import get_logger
 _CELL_M = 0.25          # coverage grid pitch
 _PATH_MIN_STEP_M = 0.02  # path decimation
 _DRONE_COLORS = ("tab:blue", "tab:orange", "tab:purple")
+
+# GUI backends tried (in order) for the live window only. The headless/PNG
+# path never touches the global backend: render_png draws straight onto its
+# own Agg canvas.
+_GUI_BACKENDS = ("TkAgg", "QtAgg", "GTK3Agg")
+_NO_DISPLAY_MSG = ("no display (DISPLAY/WAYLAND_DISPLAY unset); "
+                   "use --topdown for a PNG")
+_NO_BACKEND_MSG = ("no interactive matplotlib backend installed; install one "
+                   "(e.g. `sudo apt install python3-tk` for TkAgg) or use "
+                   "--topdown for a PNG")
+
+
+def _select_interactive_backend(log):
+    """Switch matplotlib's global backend to a working GUI one for --live.
+
+    Returns (ok, detail): detail is the backend name on success, otherwise a
+    human-readable reason. Verified by actually creating (and closing) a
+    pyplot figure — matplotlib only fails at canvas time, not at use() time.
+    """
+    if not (os.environ.get("DISPLAY") or os.environ.get("WAYLAND_DISPLAY")):
+        return False, _NO_DISPLAY_MSG
+    import matplotlib
+    for name in _GUI_BACKENDS:
+        try:
+            matplotlib.use(name, force=True)
+            import matplotlib.pyplot as plt
+            fig = plt.figure()
+            plt.close(fig)
+            return True, name
+        except Exception as e:
+            log.debug("matplotlib backend %s unavailable: %s", name, e)
+    return False, _NO_BACKEND_MSG
 
 
 class TopDownView:
@@ -187,18 +220,22 @@ class TopDownView:
         fig.savefig(path, dpi=110, bbox_inches="tight")
         self._log.info("top-down view saved to %s", path)
 
-    def run_live(self, duration_s=None) -> None:
-        """Interactive updating window. MAIN THREAD ONLY (matplotlib GUI)."""
-        try:
-            import matplotlib.pyplot as plt
-            plt.ion()
-            fig, ax = plt.subplots(figsize=(6, 9))
-        except Exception as e:
-            self._log.warning("live view unavailable (%s); running headless",
-                              e)
-            if duration_s:
-                time.sleep(duration_s)
-            return
+    def run_live(self, duration_s=None) -> bool:
+        """Interactive updating window. MAIN THREAD ONLY (matplotlib GUI).
+
+        Selects a real GUI backend at runtime (Agg cannot display — its
+        plt.pause() is a non-interactive no-op). Returns False, after logging
+        a clear reason, when no display / GUI backend is usable so callers
+        can fall back to headless running + --topdown.
+        """
+        ok, detail = _select_interactive_backend(self._log)
+        if not ok:
+            self._log.warning("live view unavailable: %s", detail)
+            return False
+        import matplotlib.pyplot as plt
+        self._log.info("live view running on the %s backend", detail)
+        plt.ion()
+        fig, ax = plt.subplots(figsize=(6, 9))
         period = 1.0 / float(self._cfg.viz.fps)
         end = None if duration_s is None else time.time() + duration_s
         try:
@@ -212,3 +249,4 @@ class TopDownView:
         finally:
             plt.ioff()
             plt.close(fig)
+        return True
