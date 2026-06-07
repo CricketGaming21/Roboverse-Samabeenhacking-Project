@@ -19,7 +19,11 @@ CONFIG_PATH = "sim_config.yaml"
 
 @pytest.fixture()
 def cfg():
-    return load_config(CONFIG_PATH)
+    c = load_config(CONFIG_PATH)
+    # This file tests the PROCEDURAL generator (the authored fixed map has
+    # its own suite in test_phase9_authored.py).
+    c.arena.layout = "procedural"
+    return c
 
 
 @pytest.fixture()
@@ -102,7 +106,7 @@ def test_world_body_counts(cfg, registry):
     assert len(b.obstacles) == cfg.arena.obstacles.count
     assert len(b.drones) == len(cfg.drones.units) == 3
     assert len(b.rovers) == cfg.rovers.count == 5
-    assert len(b.pads) == len(cfg.pads) == 3
+    assert len(b.pads) == len(cfg.pads) == 5
     expected = (1 + 4 + cfg.arena.obstacles.count + 3 + cfg.rovers.count
                 + len(cfg.pads))
     assert registry.body_count() == b.total == expected

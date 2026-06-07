@@ -46,9 +46,9 @@ def _connect(cfg, index=0) -> DroneAPI:
     return d
 
 
-# Drone 0 starts at arena (north=0.6, east=1.5), heading 0 (facing +north)
-# => world (x=1.5, y=0.6), nose along +y.
-START_W = (1.5, 0.6)
+# Drone 0 starts at arena (north=0.6, east=1.1), heading 0 (facing +north)
+# => world (x=1.1, y=0.6), nose along +y.
+START_W = (1.1, 0.6)
 
 
 # --------------------------------------------------------------------------- #
@@ -123,8 +123,8 @@ def test_hover_holds_position_for_duration(sim, cfg):
 # --------------------------------------------------------------------------- #
 
 def test_move_to_world_geometry(sim, cfg):
-    """Takeoff at world (1.5, 0.6) facing north: right=east(+x), forward=
-    north(+y). move_to(50,100,150)cm must land at world (2.0, 1.6, 1.5) m."""
+    """Takeoff at world (1.1, 0.6) facing north: right=east(+x), forward=
+    north(+y). move_to(50,100,150)cm must land at world (1.6, 1.6, 1.5) m."""
     d = _connect(cfg)
     d.takeoff(100)
     r = d.move_to(50, 100, 150)

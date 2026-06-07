@@ -19,8 +19,8 @@ from simcore import aruco_assets
 from simcore.config import load_config
 from simcore.registry import get_registry, shutdown_registry
 
-# Pad 10 sits at arena (north=3.0, east=1.5) — dead ahead of drone 0's start
-# (0.6, 1.5, heading north): move_to(0, 240, z) parks the drone above it.
+# Drone 0 flies from its configured start to above pad cfg.pads[0]
+# (takeoff frame at heading 0: x = right = east, y = forward = north).
 PAD_ID = 10
 
 
@@ -29,7 +29,8 @@ def cfg():
     c = load_config("sim_config.yaml")
     c.meta.real_time_factor = 10.0
     c.scoring.enabled = False  # referee not under test here
-    c.arena.obstacles.count = 0  # clean sight lines, deterministic views
+    c.arena.layout = "procedural"  # authored map off: clean sight lines
+    c.arena.obstacles.count = 0
     c.rovers.count = 0
     return c
 
@@ -69,8 +70,11 @@ def _wait_frame(stream, timeout_s=5.0):
 
 
 def _stream_over_pad(cfg, d, pitch_deg=90):
+    pad = cfg.pads[0]
+    start = cfg.drones.units[0].start
     d.takeoff(150)
-    d.move_to(0, 240, 150)  # above pad 10
+    d.move_to((pad.east - start[1]) * 100.0,
+              (pad.north - start[0]) * 100.0, 150)  # above pad cfg.pads[0]
     d.set_camera_angle(CameraPitchMode.DOWN_ABSOLUTE, pitch_deg)
     stream = d.create_video_stream()
     d.set_video_stream(True)

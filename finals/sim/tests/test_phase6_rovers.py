@@ -41,6 +41,7 @@ def cfg_scan():
     """Parked rovers + clean sight lines — scan-geometry checks."""
     c = _base_cfg()
     c.rovers.patrol.speed_mps = 0.0
+    c.arena.layout = "procedural"  # authored crates off: controlled arena
     c.arena.obstacles.count = 0
     return c
 
@@ -124,12 +125,14 @@ def test_drone_scans_rover_marker_above_threshold(cfg_scan):
 
         d = DroneAPI()
         d.connect(cfg_scan.drones.units[0].ip)
+        start = cfg_scan.drones.units[0].start
         d.takeoff(150)
-        # Drone 0 takes off at arena (0.6, 1.5) heading north => takeoff
+        # Drone 0 takes off at its configured start heading north => takeoff
         # frame: x(right)=east, y(forward)=north. Park the CAMERA (mounted
         # mount_offset_m ahead of centre) directly over the rover marker.
         cam_off_cm = cfg_scan.camera.mount_offset_m * 100.0
-        d.move_to((re_ - 1.5) * 100.0, (rn - 0.6) * 100.0 - cam_off_cm, 150)
+        d.move_to((re_ - start[1]) * 100.0,
+                  (rn - start[0]) * 100.0 - cam_off_cm, 150)
         d.set_camera_angle(CameraPitchMode.DOWN_ABSOLUTE, 90)
         stream = d.create_video_stream()
         d.set_video_stream(True)
@@ -172,10 +175,12 @@ def test_marker_faces_up_not_visible_edge_on(cfg_scan):
         rn, re_ = reg.rover_arena_positions()[0]
         d = DroneAPI()
         d.connect(cfg_scan.drones.units[0].ip)
+        start = cfg_scan.drones.units[0].start
         d.takeoff(100)
         # Stand off 1.2 m south of the rover with the camera AT the marker
         # plane (rover top ~0.27 m), looking forward (north): true edge-on.
-        d.move_to((re_ - 1.5) * 100.0, (rn - 0.6) * 100.0 - 120.0, 27)
+        d.move_to((re_ - start[1]) * 100.0,
+                  (rn - start[0]) * 100.0 - 120.0, 27)
         d.set_camera_angle(CameraPitchMode.DOWN_ABSOLUTE, 0)
         stream = d.create_video_stream()
         d.set_video_stream(True)

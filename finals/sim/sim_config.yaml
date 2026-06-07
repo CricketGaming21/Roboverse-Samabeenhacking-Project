@@ -14,12 +14,25 @@ meta:
 # --- Arena: a rectangular room -----------------------------------------------
 arena:
   shape: rectangle
+  layout: authored         # authored (fixed map matching the reference images, DEFAULT)
+                           # | procedural (seeded random — robustness mode, kept working)
   length_m: 10.0           # extent along NORTH (x)
   width_m: 6.0             # extent along EAST  (y)
   height_m: 3.0            # ceiling
   wall_thickness_m: 0.1
   origin: [0.0, 0.0, 0.0]  # where the arena/UWB origin sits in pybullet world
   yaw_deg: 0.0             # arena->world rotation (0 = aligned)
+  # --- authored layout (layout: authored) — APPROXIMATE coords, adjust freely.
+  # north = image bottom->top, east = image left->right; entrance is SW (~0.5, 0.5).
+  authored:
+    crate_m: 0.45          # crate footprint side; cluster boxes touch like stacked crates
+    clusters:              # crate clusters at image positions; heights vary [min, max]
+      - { center: [5.0, 3.0], boxes: 5, height_m: [0.4, 1.2] }   # central plus of crates
+      - { center: [7.5, 4.2], boxes: 2, height_m: [0.6, 1.0] }   # upper-right pair
+      - { center: [4.6, 5.4], boxes: 2, height_m: [0.4, 0.9] }   # right-edge pair
+      - { center: [3.0, 3.5], boxes: 2, height_m: [0.5, 1.1] }   # lower-centre pair
+    archway: { corner: [9.0, 5.0], width_m: 1.0, height_m: 1.2 } # tunnel in the NE corner
+  # --- procedural layout (layout: procedural) — the seeded random generator ---
   obstacles:
     count: 8
     footprint_min_m: 0.3   # box/pillar footprint side
@@ -50,9 +63,11 @@ drones:
     drain_pct_per_min: 8.0
     low_threshold_pct: 10  # below this, motion commands raise LowBattery
   units:                   # one entry per drone (list under a key — valid YAML)
-    - { ip: "10.0.0.11", uwb_tag_id: 0, start: [0.6, 1.5], heading_deg: 0.0 }
-    - { ip: "10.0.0.12", uwb_tag_id: 1, start: [0.6, 3.0], heading_deg: 0.0 }
-    - { ip: "10.0.0.13", uwb_tag_id: 2, start: [0.6, 4.5], heading_deg: 0.0 }
+    # Clustered at the SW entrance (the same spot the convoy enters), ~0.5 m
+    # apart, so they fan out from there to their pads.
+    - { ip: "10.0.0.11", uwb_tag_id: 0, start: [0.6, 1.1], heading_deg: 0.0 }
+    - { ip: "10.0.0.12", uwb_tag_id: 1, start: [0.6, 0.6], heading_deg: 0.0 }
+    - { ip: "10.0.0.13", uwb_tag_id: 2, start: [1.1, 0.6], heading_deg: 0.0 }
 
 # --- UWB tag (matches UWBParserThread + its doc) -----------------------------
 uwb:
@@ -95,11 +110,16 @@ aruco:
   rover_marker_size_m: 0.15  # marker side on top of each rover
 
 # --- Landing pads (GIVEN coordinates; placeholders until provided) -----------
-# Each pad has an ArUco id and a position in arena frame (north, east).
+# Each pad: ArUco id + arena position (north, east) + scoring flags.
+# valid: a legal landing zone (false = decoy/red marker). designated: one of
+# the briefed "Land" targets this episode (part-1 scoring needs valid AND
+# designated). ~5 pads, 3 designated — matches the reference image.
 pads:
-  - { id: 10, north: 3.0, east: 1.5 }
-  - { id: 11, north: 6.0, east: 4.5 }
-  - { id: 12, north: 8.5, east: 3.0 }
+  - { id: 10, north: 8.5, east: 3.0, valid: true,  designated: true }   # top "Land"
+  - { id: 11, north: 5.5, east: 4.8, valid: true,  designated: true }   # right "Land"
+  - { id: 12, north: 2.0, east: 4.5, valid: true,  designated: true }   # bottom-right "Land"
+  - { id: 13, north: 5.5, east: 1.2, valid: false, designated: false }  # left-mid INVALID
+  - { id: 14, north: 2.0, east: 1.5, valid: true,  designated: false }  # valid, not designated
 
 # --- Rovers (5, moving targets, each a unique ArUco id on top) ---------------
 rovers:

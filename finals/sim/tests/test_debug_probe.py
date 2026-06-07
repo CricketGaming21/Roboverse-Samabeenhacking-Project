@@ -37,9 +37,13 @@ def sim(cfg):
 def test_probe_snapshot_contents_and_json(sim, cfg):
     d = DroneAPI()
     d.connect(cfg.drones.units[0].ip)
+    pad = cfg.pads[0]
+    start = cfg.drones.units[0].start
     d.takeoff(150)
     d.set_camera_angle(CameraPitchMode.DOWN_ABSOLUTE, 90)
-    d.move_to(0, 240 - cfg.camera.mount_offset_m * 100, 150)  # over pad 10
+    d.move_to((pad.east - start[1]) * 100.0,
+              (pad.north - start[0]) * 100.0
+              - cfg.camera.mount_offset_m * 100, 150)  # over pad cfg.pads[0]
     time.sleep(0.3)  # let the referee accumulate holds
 
     probe = DebugProbe(sim)
@@ -49,7 +53,7 @@ def test_probe_snapshot_contents_and_json(sim, cfg):
     d0 = snap["drones"][0]
     assert d0["flying"] is True and d0["connected"] is True
     assert abs(d0["true"]["world"][2] - 1.5) < 0.03
-    assert abs(d0["true"]["arena_ne_m"][0] - 3.0) < 0.15   # over pad 10
+    assert abs(d0["true"]["arena_ne_m"][0] - pad.north) < 0.15  # over the pad
     assert d0["true"]["takeoff_cm"] is not None
     assert d0["estimate"]["takeoff_cm"] is not None
     assert d0["estimate"]["drift_error_m"] >= 0.0
@@ -66,8 +70,8 @@ def test_probe_snapshot_contents_and_json(sim, cfg):
     assert all(r["waypoint_arena_ne_m"] is None for r in snap["rovers"])
 
     # referee: WHY pad 10 is scoring — size, frame, hold, banked
-    info = snap["referee"]["per_drone"][0].get(10)
-    assert info is not None, "probe referee view should see pad 10"
+    info = snap["referee"]["per_drone"][0].get(pad.id)
+    assert info is not None, f"probe referee view should see pad {pad.id}"
     assert info["side_px"] >= cfg.scoring.min_marker_px
     assert info["fully_in_frame"] and info["gate_ok"]
     assert info["hold"] >= 1

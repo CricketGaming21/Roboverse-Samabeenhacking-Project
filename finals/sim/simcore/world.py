@@ -154,7 +154,7 @@ def build(client: int, cfg, layout) -> WorldBodies:
         for w in layout.walls)
 
     obstacles = tuple(
-        _make_box(client, cfg, o.north, o.east, o.height_m / 2,
+        _make_box(client, cfg, o.north, o.east, o.z0_m + o.height_m / 2,
                   o.half_n, o.half_e, o.height_m / 2, _RGBA["obstacle"])
         for o in layout.obstacles)
 

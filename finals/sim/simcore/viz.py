@@ -183,11 +183,17 @@ class TopDownView:
 
         half = cfg.aruco.pad_marker_size_m / 2
         for pad in cfg.pads:
-            fc = "limegreen" if pad.id in banked else "white"
+            valid = getattr(pad, "valid", True)
+            designated = getattr(pad, "designated", True)
+            fc = "limegreen" if pad.id in banked else (
+                "white" if valid else "mistyrose")
+            ec = "black" if designated else ("dimgray" if valid else "red")
             ax.add_patch(Rectangle((pad.east - half, pad.north - half),
-                                   2 * half, 2 * half, fc=fc, ec="black",
-                                   zorder=3))
-            ax.annotate(str(pad.id), (pad.east, pad.north + half + 0.06),
+                                   2 * half, 2 * half, fc=fc, ec=ec,
+                                   lw=1.6 if designated else 1.0, zorder=3))
+            tag = "" if designated else (" (alt)" if valid else " (X)")
+            ax.annotate(f"{pad.id}{tag}",
+                        (pad.east, pad.north + half + 0.06),
                         ha="center", fontsize=8, zorder=3)
 
         for (n, e), rid in zip(rovers, self._rover_ids):

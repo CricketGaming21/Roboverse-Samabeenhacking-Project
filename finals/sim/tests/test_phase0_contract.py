@@ -304,7 +304,7 @@ def test_config_loads_yaml():
     assert cfg.drones.units[1].uwb_tag_id == 1
     assert cfg.drones.battery.low_threshold_pct == 10
     assert cfg.uwb.apply_origin_offset is False
-    assert [p.id for p in cfg.pads] == [10, 11, 12]
+    assert [p.id for p in cfg.pads] == [10, 11, 12, 13, 14]
     assert cfg.rovers.marker_ids == [20, 21, 22, 23, 24]
     assert cfg.scoring.hold_frames == 5
     assert cfg.aruco.dictionary == "DICT_6X6_250"

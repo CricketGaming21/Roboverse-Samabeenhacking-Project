@@ -1,15 +1,19 @@
-"""Procedural room/obstacle generation (seeded) — pure geometry, no PyBullet.
+"""Room/obstacle layout generation — pure geometry, no PyBullet.
 
 Simulator INTERNAL — mission code must never import simcore.
 
-generate(cfg) is a pure function of the config (including meta.seed): the same
-config always yields an identical ArenaLayout (the determinism contract that
-tests/test_phase1 checks). All coordinates here are in the ARENA frame
-(north, east, metres) — world placement happens in world.py via frames.py.
+TWO LAYOUT MODES (config arena.layout):
+- "authored" (DEFAULT): the fixed map matching the reference images — crate
+  clusters + archway from arena.authored, deterministic, no RNG. Coordinates
+  are approximate starting points meant to be nudged in sim_config.yaml.
+- "procedural" (RETAINED — robustness mode): the seeded rejection sampler.
+  The real competition map is unknown; a mission tuned only against the
+  authored map would overfit, so this mode stays working.
 
-Room interior spans north in [0, length_m], east in [0, width_m]; the four
-walls sit just OUTSIDE that span, so configured coordinates are always
-positive and inside the room.
+generate(cfg) is a pure function of the config (including meta.seed): the same
+config always yields an identical ArenaLayout. All coordinates here are in the
+ARENA frame (north, east, metres) — world placement happens in world.py via
+frames.py. Room interior spans north in [0, length_m], east in [0, width_m].
 """
 
 import math
@@ -17,6 +21,7 @@ from dataclasses import dataclass
 
 import numpy as np
 
+from . import aruco_assets
 from .log import get_logger
 
 _MAX_ATTEMPTS = 20_000  # rejection-sampling guard
@@ -39,12 +44,15 @@ class WallSpec:
 
 @dataclass(frozen=True)
 class ObstacleSpec:
-    """One box/pillar obstacle: axis-aligned footprint + height, arena frame."""
+    """One box obstacle: axis-aligned footprint + height, arena frame.
+    z0_m raises the box off the floor (the archway lintel); ground boxes
+    keep the default 0."""
     north: float
     east: float
     half_n: float
     half_e: float
     height_m: float
+    z0_m: float = 0.0
 
 
 @dataclass(frozen=True)
@@ -162,17 +170,89 @@ def _place_rovers(cfg, rng, obstacles) -> tuple:
     return tuple(placed)
 
 
+# Deterministic local arrangement of touching crates within a cluster, in
+# units of crate_m around the centre: a plus/L look like the reference photos.
+_CLUSTER_PATTERN = ((0, 0), (1, 0), (0, 1), (-1, 0), (1, 1),
+                    (0, -1), (-1, 1), (1, -1), (2, 0), (0, 2))
+_PILLAR_HALF_M = 0.15     # archway pillar footprint half-side
+_LINTEL_THICK_M = 0.3     # archway lintel thickness
+
+
+def _authored_obstacles(cfg) -> tuple:
+    """The fixed crate clusters + archway from arena.authored. No RNG."""
+    au = cfg.arena.authored
+    crate = float(au.crate_m)
+    half = crate / 2.0
+    obstacles = []
+    for ci, cl in enumerate(au.clusters):
+        if cl.boxes > len(_CLUSTER_PATTERN):
+            raise ValueError(f"authored cluster {ci}: at most "
+                             f"{len(_CLUSTER_PATTERN)} boxes supported")
+        h_lo, h_hi = cl.height_m
+        heights = np.linspace(float(h_lo), float(h_hi), cl.boxes)
+        cn, ce = cl.center
+        for i in range(cl.boxes):
+            dn, de = _CLUSTER_PATTERN[i]
+            obstacles.append(ObstacleSpec(cn + dn * crate, ce + de * crate,
+                                          half, half, float(heights[i])))
+    arch = au.archway
+    an, ae = arch.corner
+    off = arch.width_m / 2.0 + _PILLAR_HALF_M  # pillar centres off the axis
+    obstacles.append(ObstacleSpec(an, ae - off, _PILLAR_HALF_M, _PILLAR_HALF_M,
+                                  float(arch.height_m)))
+    obstacles.append(ObstacleSpec(an, ae + off, _PILLAR_HALF_M, _PILLAR_HALF_M,
+                                  float(arch.height_m)))
+    obstacles.append(ObstacleSpec(an, ae, _PILLAR_HALF_M, off + _PILLAR_HALF_M,
+                                  _LINTEL_THICK_M, z0_m=float(arch.height_m)))
+    _validate_authored(cfg, obstacles)
+    return tuple(obstacles)
+
+
+def _validate_authored(cfg, obstacles) -> None:
+    """Guard the hand-authored coordinates: in bounds, and no GROUND box may
+    overlap a pad footprint or sit on a drone start (pads must stay landable).
+    Raises ValueError on a bad config rather than building a broken arena."""
+    L, W = cfg.arena.length_m, cfg.arena.width_m
+    pad_half = cfg.aruco.pad_marker_size_m * aruco_assets.texture_scale() / 2
+    for o in obstacles:
+        if not (0.0 <= o.north - o.half_n and o.north + o.half_n <= L
+                and 0.0 <= o.east - o.half_e and o.east + o.half_e <= W):
+            raise ValueError(f"authored obstacle out of bounds: {o}")
+        if o.z0_m > 0.0:
+            continue  # elevated (lintel): ground clearance not applicable
+        for pad in cfg.pads:
+            if rect_gap_m(o.north, o.east, o.half_n, o.half_e,
+                          pad.north, pad.east, pad_half, pad_half) <= 0.0:
+                raise ValueError(f"authored obstacle overlaps pad {pad.id}: "
+                                 f"{o} — adjust arena.authored or pads")
+        for d in cfg.drones.units:
+            if point_rect_dist_m(d.start[0], d.start[1], o.north, o.east,
+                                 o.half_n, o.half_e) < 0.15:
+                raise ValueError(f"authored obstacle sits on drone start "
+                                 f"{d.start}: {o}")
+
+
 def generate(cfg) -> ArenaLayout:
-    """Generate the full seeded layout. Pure function of cfg (incl. meta.seed)."""
+    """Generate the layout for the configured arena.layout mode.
+
+    authored => fixed obstacles (no RNG); procedural => seeded sampler.
+    Rover starts are seeded random within patrol bounds in BOTH modes.
+    """
     if cfg.arena.shape != "rectangle":
         raise ValueError(f"unsupported arena.shape: {cfg.arena.shape!r}")
     rng = np.random.default_rng(cfg.meta.seed)
 
-    # Obstacles must keep clear of pads AND drone starts (keepclear_radius_m).
-    keepout = ([(p.north, p.east) for p in cfg.pads]
-               + [(d.start[0], d.start[1]) for d in cfg.drones.units])
+    if cfg.arena.layout == "authored":
+        obstacles = _authored_obstacles(cfg)
+    elif cfg.arena.layout == "procedural":
+        # Obstacles keep clear of pads AND drone starts (keepclear_radius_m).
+        keepout = ([(p.north, p.east) for p in cfg.pads]
+                   + [(d.start[0], d.start[1]) for d in cfg.drones.units])
+        obstacles = _place_obstacles(cfg, rng, keepout)
+    else:
+        raise ValueError(f"unknown arena.layout: {cfg.arena.layout!r} "
+                         f"(use 'authored' or 'procedural')")
 
-    obstacles = _place_obstacles(cfg, rng, keepout)
     rover_starts = _place_rovers(cfg, rng, obstacles)
     drone_starts = tuple(StartPose(d.start[0], d.start[1], d.heading_deg)
                          for d in cfg.drones.units)
@@ -188,6 +268,6 @@ def generate(cfg) -> ArenaLayout:
         rover_starts=rover_starts,
     )
     get_logger("arena", cfg).debug(
-        "generated layout: seed=%s obstacles=%d rovers=%d",
-        cfg.meta.seed, len(obstacles), len(rover_starts))
+        "generated layout (%s): seed=%s obstacles=%d rovers=%d",
+        cfg.arena.layout, cfg.meta.seed, len(obstacles), len(rover_starts))
     return layout

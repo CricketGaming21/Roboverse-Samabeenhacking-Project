@@ -28,7 +28,8 @@ def cfg():
     c.meta.real_time_factor = 10.0
     c.scoring.enabled = False  # referee not under test here
     c.camera.use_egl = False
-    c.arena.obstacles.count = 0   # controlled arena: we spawn our own boxes
+    c.arena.layout = "procedural"  # authored map off: controlled arena
+    c.arena.obstacles.count = 0   # we spawn our own boxes
     c.rovers.count = 0
     return c
 
@@ -80,8 +81,8 @@ def _wait_goal_done(reg, index=0, timeout_s=5.0):
 # --------------------------------------------------------------------------- #
 
 def test_forward_flag_trips_at_configured_range(sim, cfg):
-    # Box south face at north = 2.4; drone flies north along east = 1.5.
-    _spawn_box(sim, north=2.6, east=1.5)
+    # Box south face at north = 2.4; drone 0 flies north along east = 1.1.
+    _spawn_box(sim, north=2.6, east=1.1)
     d = _connect(cfg)
     d.takeoff(100)
     assert d.get_obstacles() == Obstacles()      # gap 1.8 m: all clear
@@ -101,7 +102,7 @@ def test_forward_flag_trips_at_configured_range(sim, cfg):
 
 def test_min_altitude_gate_and_down_bit(sim, cfg):
     # Box very close ahead (south face at north = 1.1, gap 0.5 m from start).
-    _spawn_box(sim, north=1.3, east=1.5)
+    _spawn_box(sim, north=1.3, east=1.1)
     d = _connect(cfg)
     assert d.get_obstacles() == Obstacles()      # grounded: gated, all clear
 
@@ -121,8 +122,8 @@ def test_min_altitude_gate_and_down_bit(sim, cfg):
 
 
 def test_altitude_ray_reads_obstacle_top(sim, cfg):
-    # Flat box (top at 0.5 m) under drone 1's path along east = 3.0.
-    _spawn_box(sim, north=2.0, east=3.0, half_n=0.5, half_e=0.5, height=0.5)
+    # Flat box (top at 0.5 m) under drone 1's path along east = 0.6.
+    _spawn_box(sim, north=2.0, east=0.6, half_n=0.5, half_e=0.5, height=0.5)
     d = _connect(cfg, index=1)
     d.takeoff(150)
     assert abs(d.get_altitude() - 150.0) < 3.0   # over the floor
@@ -137,7 +138,7 @@ def test_altitude_ray_reads_obstacle_top(sim, cfg):
 # --------------------------------------------------------------------------- #
 
 def test_avoidance_reflex_steps_back_and_logs_preemption(sim, cfg, caplog):
-    _spawn_box(sim, north=2.6, east=1.5)         # south face at 2.4
+    _spawn_box(sim, north=2.6, east=1.1)         # south face at 2.4
     d = _connect(cfg)
     d.takeoff(100)
     r = d.set_avoidance_direction(Direction.BACK, 30, BarrierMask.FRONT)

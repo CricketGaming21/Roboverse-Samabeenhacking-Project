@@ -123,11 +123,10 @@ def test_uwb_tracks_truth_through_motion(sim, cfg):
 def test_uwb_reports_all_mapped_tags_and_no_unmapped(sim, cfg):
     u = _start_uwb()
     try:
-        for unit, start in zip(cfg.drones.units,
-                               [(0.6, 1.5), (0.6, 3.0), (0.6, 4.5)]):
+        for unit in cfg.drones.units:  # grounded at their configured starts
             x, y, t = _wait_for_sample(u, unit.uwb_tag_id)
-            assert abs(x - start[0]) < 0.3  # north
-            assert abs(y - start[1]) < 0.3  # east
+            assert abs(x - unit.start[0]) < 0.3  # north
+            assert abs(y - unit.start[1]) < 0.3  # east
             assert t is not None
         assert u.get_tag_position(99) == (None, None, None)  # unmapped tag
     finally:
