@@ -1,182 +1,106 @@
-# RoboVerse Finals — Claude Context
+# RoboVerse 2026 Finals — Claude Context (Challenge 2)
+
+> Context bridge for the **mission-code** repo. Read this before any task.
+> This file reflects the *corrected* understanding of the Hula platform after a
+> full read of the pyhulax SDK, the UWB parser, and the Finals briefing. Where it
+> contradicts older notes or the qualifier, **this file wins.**
 
 ## Competition
-RoboVerse 2026 Finals — Pre-University Category
-Challenge 2 ONLY (we do not do Challenge 1)
-Prize: 1st $1800 / 2nd $1300 / 3rd $900
+- RoboVerse 2026 Finals — **Pre-University category**.
+- We do **Challenge 2 only** (the mapping drone / Challenge 1 is University-only — not us).
+- Prize: 1st $1800 / 2nd $1300 / 3rd $900.
 
 ## Challenge 2 — two phases
+### Phase 1 — Landing
+- Launch **3 HULA drones** from the C2 terminal.
+- Land accurately on **3 valid landing zones**, each marked with an **ArUco marker**.
+- Landing-zone coordinates are **provided by the organisers** (from the mapping step). Treat them as a known input — we do not have to discover them by exploring.
+- Scored on **landing accuracy + speed**.
 
-### Phase 1: Landing
-- Launch 3x HULA drones from C2 terminal
-- Land accurately on 3 chosen valid landing zones
-- Landing zones marked by Aruco markers in arena
-- Scored on: accuracy of landing + speed
+### Phase 2 — Search and scan
+- **5 RoboMaster ground rovers** loiter in the arena for a period.
+- The 3 HULA drones search for them and **capture them on camera**.
+- **Each rover carries a unique ArUco marker on top** (confirmed for the real event). So "snapshot the rover" = **read its ArUco marker** — detection is ArUco-first, not object-detection-first.
+- Scored on **number of distinct rovers successfully captured + time**.
 
-### Phase 2: Search and snapshot
-- 5x RoboMaster ground robots loiter in arena
-- 3 HULA drones search and photograph the robots
-- Scored on: successful snapshots + time taken
+## THE PLATFORM REALITY (read carefully — this is what changed)
+The HULA (HG-Fly F09-lite) is a small indoor edu-drone driven by the **pyhulax** SDK. It is **not** a PX4/MAVSDK platform and **not** a depth-camera platform.
 
-## How this differs from the qualifier
-| Qualifier                  | Finals                          |
-|----------------------------|---------------------------------|
-| PX4 SITL simulation        | Real physical hardware          |
-| MAVSDK-python              | pyhulax library                 |
-| Single drone               | 3x HULA drones (swarm)          |
-| GNSS/simulated GPS         | UWB positioning                 |
-| Runs inside Ubuntu VM      | Runs on Windows C2 terminal     |
-| Gazebo depth camera        | Physical onboard camera         |
-| MAVLink UDP port 14540     | pyhulax SDK                     |
+### Control — pyhulax, command-based and BLOCKING
+- `takeoff(height_cm=100)`, `land()`, `hover(seconds)`
+- `move(Direction, distance_cm, speed=VelocityLevel.ZOOM)` — relative step along the **current heading** (body frame)
+- `rotate(angle_degrees)` — +CCW / −CW yaw
+- `move_to(x, y, z)` — straight line to a point in the **takeoff-origin frame, in cm** (x right, y forward, z up)
+- There is **no MAVSDK-style velocity offboard.** Commands block until done (or `blocking=False`).
+
+### Position — two frames, do not conflate
+- **UWB (arena frame):** `UWBParserThread.get_tag_position(tag_id) -> (x, y, t)` in **metres**, **X-Y only (no Z)**, one tag per drone. This is the arena-absolute, drift-free truth (with small noise). Origin/orientation set by the anchors.
+- **Onboard estimate (takeoff frame):** `get_position()` returns cm in the takeoff-origin frame and **drifts** (optical-flow/IMU). Use UWB to correct it.
+- **Altitude** comes from the downward **ToF**: `get_altitude()` (cm). **Never from UWB.**
+- Other telemetry: `get_orientation()` (yaw/pitch/roll), `get_battery()`, `get_state()`.
+
+### Obstacles — barrier flags only, reactive avoidance
+- Sensing is coarse **IR/ToF barrier sensors in 5 directions**: `get_obstacles() -> Obstacles(forward, back, left, right, down)` (booleans), `any_obstacle()`, `get_drone_status()` (bitmask: 0 fwd,1 back,2 left,3 right,4 down).
+- Built-in reactive avoidance: `set_barrier_mode(enabled)` (firmware auto-avoid) and `set_avoidance_direction(direction, distance_cm, barrier_mask)` (detect → step away).
+- **There is NO depth image, NO point cloud, NO lidar, NO map.** Avoidance is anti-bump reflex + conservative coverage. Sensors need a minimum altitude (~0.35 m) to work.
+
+### Camera — monocular, tiltable
+- One main **front camera with controllable pitch**: `set_camera_angle(CameraPitchMode, angle)` (0° = forward … 90° = straight down), plus a downward optical-flow camera. `VisionMode.OPTICAL_FLOW` / `FRONT_CAMERA`.
+- Video: `create_video_stream()` → `set_video_stream(True)` → `latest_frame.to_rgb()` (RGB `np.ndarray`). Run `cv2.aruco` on these frames.
+- pyhulax also has built-in QR/digit/arrow recognition, but those target HG's own fiducials — **we use our own `cv2.aruco`**, not pyhulax's QR features.
+
+## What does NOT carry over from the qualifier (do not reuse)
+- **Depth → point cloud → RRT\* / GlobalMapper / PointCloudPlanner / depth_to_xy_map** — depends on a depth camera the Hula does not have. **Challenge 1 only. Do not port.**
+- **RealSense / pyrealsense2** code — that's the mapping drone. Not on the Hula.
+- **MAVSDK / PX4 / offboard velocity / Gazebo** — wrong control stack for the Hula.
+These files exist in `reference/` for history; they are **not applicable to Challenge 2**.
+
+## What DOES carry over (reusable thinking)
+- **Committing-waypoint executor:** hold a single target until reached, replan only on real events. (Our qualifier failure was reactive velocity commands overwriting each other every 0.1 s — do not repeat that.)
+- **Detection → lock-on → capture** pattern, and the overall mission structure.
+- **Config-driven values** (no hardcoding).
 
 ## Hardware
-- 3x Highgreat HULA drones
-- C2 Terminal: Windows laptop with Ubuntu 22.04 VM
-- UWB tag on each drone (gives north-east position in arena)
-- Onboard camera on each HULA drone
+- 3× Highgreat HULA drones, one UWB tag each (arena north-east position).
+- C2 Terminal: Windows laptop hosting an Ubuntu 22.04 VM; pyhulax connects to the drones over Wi-Fi (use `Dola` discovery to find drone IPs, then `DroneAPI().connect(ip)`).
 
-## Key libraries
-- pyhulax         HULA drone control and camera access
-- UWB library     drone UWB positioning (provided by organisers)
-- OpenCV          image processing
-- YOLO / RKNN     object detection (NPU accelerated ~50fps)
+## Detection & scoring
+- **Primary: ArUco** (`cv2.aruco`) on the front/down camera frames — pad markers (Phase 1) and unique rover markers (Phase 2).
+- A "successful capture" = marker detected, ID decoded, and a stable/close enough read (size + in-frame + held a few frames).
+- **YOLO / RKNN is a contingency only** — if any target turns out to be a bare robot. The YOLO subgroup trains it separately; the NPU (~50 fps via RKNN) is the deployment path if needed. Keep detection behind one interface so ArUco ↔ YOLO is a swap.
 
-## Full folder map (read this carefully)
-\`\`\`
+## We develop against a SIMULATOR first
+- A separate **`hula_sim`** project provides a drop-in `pyhulax` package, a drop-in `UWBParserThread`, and a PyBullet world (room, ArUco pads at given coords, 5 moving ArUco-tagged rovers, barrier sensors, scoring, top-down view).
+- **Mission code imports `pyhulax` / `UWBParserThread` unchanged** and runs against the sim for development, then against the real SDK on the day. The swap is just which `pyhulax` is on the path.
+- **Mission code must never depend on anything sim-specific** — only the public pyhulax/UWB API.
+
+## Coordinate-frame & gotcha checklist
+- `move` = body / current heading. `move_to` + `get_position` = fixed takeoff frame (cm). UWB = arena frame (m), **no Z**.
+- Altitude = ToF (`get_altitude`), never UWB.
+- `get_position` drifts; UWB does not. Correct the estimate with UWB.
+- Avoidance is reactive barrier flags only — never assume a map or a planned route around an unseen obstacle.
+
+## Mission repo layout
+```
 finals/
-  mission/                    YOUR ACTIVE MISSION CODE
-    phase1_land.py            Phase 1: landing on zones
-    phase2_search.py          Phase 2: search and snapshot
-
-  control/                    DRONE CONTROL LAYER
-    hula_control.py           pyhulax wrapper class
-    uwb_handler.py            UWB position polling and correction
-
-  detection/                  VISION AND DETECTION
-    detector.py               YOLO/RKNN detection wrapper
-    snapshot.py               robot snapshot capture logic
-
-  utils/                      SHARED HELPERS
-    config.py                 ALL tunable params — read first
-    logger.py                 logging to terminal and file
-
-  reference/                  READ ONLY — never modify these
-    qualifier_code/           full qualifier scripts for reference
-    project_details/          competition brief, rules, scoring
-    sample_code/              organiser-provided reference code
-    learning_materials/       PDFs from qualifier workshops
-    hardware_docs/            hardware manuals and specs
-    dump/                     drop new files here to be organised
-
-  weights/                    YOLO model files (gitignored)
-  claude_debug/               debug scripts and logs
-    run_with_log.sh           run any script with full logging
-    organise_dump.sh          sorts files from dump into correct folders
-    logs/                     runtime logs (gitignored)
-\`\`\`
+  mission/        phase1_land.py, phase2_search.py, mission_runner.py (swarm orchestration)
+  control/        hula_control.py (pyhulax wrapper), uwb_handler.py (UWB + correction),
+                  avoidance.py (reactive barrier-flag avoidance)
+  detection/      aruco.py (PRIMARY, cv2.aruco), lockon.py (centering/approach),
+                  snapshot.py (capture + dedup), detector.py (YOLO/RKNN — contingency)
+  utils/          config.py (ALL tunables — read before hardcoding), logger.py
+  reference/      qualifier_code/ (mostly NOT applicable — see above), sample_code/,
+                  project_details/, learning_materials/, hardware_docs/
+  weights/        YOLO files (only if a bare-robot fallback is needed; gitignored)
+  claude_debug/   logging + run scripts
+```
 
 ## Rules for Claude Code — read before touching anything
-1. Read this file AND root CLAUDE.md before starting any task
-2. Read finals/reference/ folders before writing any code
-3. Read finals/utils/config.py before hardcoding ANY value
-4. NEVER modify files inside finals/reference/
-5. ALL tunable values go in finals/utils/config.py only
-6. ALL new code goes in the correct subfolder above
-7. Reference qualifier code in finals/reference/qualifier_code/ for reusable patterns
-8. Commit format: "feat/fix/docs/chore: what changed and why"
-9. After every working change: git add -A && git commit -m "..."
-   (auto-push hook sends it to GitHub automatically)
-
-## Reference files — read these before writing any code
-
-### reference/project_details/ — competition briefs, rules, scoring
-- `Potential Detection Targets.txt` — organiser hints on likely detection targets:
-  fiducial markers (Aruco / QR / AprilTag). Includes sample OpenCV Aruco detection
-  code with depth-to-3D-position conversion (pixel + depth → X,Y,Z metres).
-
-### reference/sample_code/ — organiser-provided code
-**hula_swarm/** — HULA drone swarm control and video
-- `dola.py` — "Dola" discovery listener: listens on UDP for HULA broadcast packets
-  and maintains a table of discovered aircraft IPs on the network.
-- `huladola.py` — reference for connecting to multiple HULA drones via pyhulax,
-  using Dola to find all drone IPs and pulling all video streams onto one computer
-  for multi-drone detection. (pyhulax docs: https://pyhulax.xenops.ae)
-
-**flight_control/** — drone flight control with UWB
-- `kolomee.py` — MAVSDK offboard velocity control (VelocityNedYaw) using UWB
-  position fed in via ROS2 PoseStamped. P-gain navigation to waypoints with
-  velocity limits. Key pattern for UWB-corrected position flight.
-
-**uwb/** — UWB positioning
-- `UWBParserThread.py` — threaded serial parser for the UWB tag (921600 baud,
-  auto-detects USB COM port). Maintains `{tag_id: (x, y, update_time)}` with
-  thread-safe access and configurable arena origin offset.
-
-**yolo_to_rknn/** — converting YOLO models for the NPU
-- `convertyolotoonnx.py` — minimal YOLO → ONNX export (opset 12, static shapes).
-- `convertyolotoonnx_2.py` — YOLO → ONNX export with full RKNN-compat flags
-  explained (static input, simplify, FP32, imgsz 640).
-- `convertrknn.py` — ONNX → RKNN build/export for rk3588 with step-by-step
-  error checks; notes how to enable INT8 quantization.
-- `convertrknn2.py` — compact ONNX → RKNN variant; shows 0-1 input normalisation
-  via mean 0 / std 255 and optional w8a8 INT8.
-
-**rknn_detection/** — running YOLO on the NPU
-- `getDepthAndDetect.py` — full pipeline: RealSense RGB+depth, RKNNLite YOLO
-  inference, depth-aligned bounding boxes → 3D object position.
-- `rknndecoder.py` — YOLOv11 RKNN output decoder: sigmoid, xywh→xyxy, NMS,
-  detection drawing helpers.
-- `testrknn_with_display.py` — standalone RKNN model test on a single image
-  with post-processing and display; good first check after converting a model.
-
-**realsense/** — RealSense depth camera samples (from qualifier hardware)
-- `getRGB.py` — capture and display the RGB stream.
-- `getDepth.py` — read depth value at image centre and visualise colorised depth.
-- `getInfra.py` — capture left/right infrared streams.
-- `getSyncDepthColor.py` — align depth to colour stream for synced frames.
-- `getDepthPointCloud.py` — generate a point cloud from depth + colour.
-- `getDepthAndDetect.py` — same RGB+depth+RKNN detection pipeline as
-  rknn_detection/ copy.
-- `generateTopDown.py` — build a top-down occupancy grid from depth data with
-  a downward-facing camera (camera frame → north-east grid).
-- `rknndecoder.py` — duplicate of rknn_detection/rknndecoder.py.
-
-### reference/learning_materials/ — qualifier workshop PDFs
-- `LearningMaterial1.pdf`
-- `LearningMaterial2.pdf`
-- `LearningMaterial3.pdf`
-- `Supplmentary_LearningMaterial1 (1).pdf`
-- `Supplmentary_LearningMaterial2 (1).pdf`
-
-### reference/hardware_docs/ — hardware manuals and specs
-- `UWBParserThread_Core_Documentation.pdf` — documentation for the UWB parser
-  thread / UWB tag serial interface (pairs with sample_code/uwb/UWBParserThread.py).
-
-### reference/qualifier_code/ — full qualifier scripts (see root CLAUDE.md)
-Key files: avoid.py, AvoidancePlanner.py, RRTStarPlanner.py, VelocityPlanner.py,
-PointCloudPlanner.py, GlobalMapper.py, Detector.py, drone_control.py,
-get_depth.py, depth_receiver.py, plus ~40 more utility/test scripts.
-
-## Adding new reference files
-1. Drop files into: finals/reference/dump/
-2. Run: git add -A && git commit -m "docs: add reference files to dump"
-3. In Claude Code say: "organise the reference dump"
-   Claude Code will move files to the right subfolder and update this file.
-
-## Debug workflow
-\`\`\`bash
-cd ~/Desktop/codes
-git checkout finals
-./finals/claude_debug/run_with_log.sh finals/mission/phase1_land.py
-\`\`\`
-
-## How to start every Claude Code session
-\`\`\`bash
-cd ~/Desktop/codes
-git checkout finals
-claude
-\`\`\`
-Then say:
-"Read CLAUDE.md and finals/CLAUDE.md. List every file in
-finals/reference/ and tell me what you understand about the
-project before we start anything."
+1. Read this file (and the root CLAUDE.md if present) before starting any task.
+2. **Detection is ArUco-first.** Don't reach for YOLO unless a target is confirmed bare.
+3. **No depth / point-cloud / RRT\* / RealSense / MAVSDK code** in Challenge 2 — those don't run on the Hula. Don't port qualifier avoidance.
+4. Read `reference/` before writing code, but treat the depth/RealSense/qualifier-planner material as historical, not a template.
+5. All tunable values go in `utils/config.py` only — no hardcoding.
+6. Test against the `hula_sim` simulator; keep mission code on the public pyhulax/UWB API only.
+7. New code goes in the correct subfolder above.
+8. Commit format: `feat/fix/docs/chore: what changed and why`. After a working change: `git add -A && git commit -m "..."` (auto-push hook handles the push).
