@@ -85,7 +85,7 @@ camera:
 
 # --- ArUco -------------------------------------------------------------------
 aruco:
-  dictionary: DICT_4X4_50  # supports ids 0-49
+  dictionary: DICT_6X6_250  # matches the organiser ArUco sample (Potential Detection Targets); supports ids 0-249; confirm at briefing
   pad_marker_size_m: 0.30  # printed marker side on landing pads
   rover_marker_size_m: 0.15  # marker side on top of each rover
 

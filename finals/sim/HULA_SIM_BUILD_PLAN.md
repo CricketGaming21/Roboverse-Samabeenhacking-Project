@@ -65,24 +65,21 @@ In the repo / provided materials:
 If any detail below conflicts with these files, the files win for **signatures**; this doc wins for **sim behaviour**.
 
 ### Environment
-- Ubuntu 22.04, NVIDIA GPU available (rendering is not a constraint).
-- Python 3.10+. Create a venv.
-- Dependencies (pin in `requirements.txt`): `pybullet`, `numpy`, `opencv-contrib-python` (needed for `cv2.aruco`), `pillow`, `pyyaml`, `matplotlib` (top-down view), `pytest`. Optionally `pygame` if you prefer it over matplotlib for the live view.
-- **Headless GPU rendering:** run PyBullet in `DIRECT` mode and load the EGL plugin for fast offscreen camera rendering on the GPU:
+**The dev environment is already built and validated** — WSL2 + Ubuntu 22.04 on the RTX 2080 Ti desktop, Python 3.10, GPU visible (`nvidia-smi`), PyBullet EGL hardware rendering confirmed (~hundreds of FPS at 640×480). Build here, not in the VMware VM. Specifics:
+- **venv:** `~/sim-venv` (activate via the `simvenv` alias). Run **all** commands from the project root (§5.5) so `import pyhulax` resolves to the sim — see the swap note in §5.5.
+- **Dependencies** — already frozen in the venv: `pybullet==3.2.7`, `opencv-contrib-python==4.13.0.92` (provides `cv2.aruco`), `numpy==2.2.6`, `scipy==1.15.3`, `pillow==12.2.0`, on Python 3.10. **Still to add** to `requirements.txt` and install: `pyyaml` (config), `matplotlib` (top-down view), `pytest` (tests). (`pygame` optional if preferred over matplotlib.)
+- **Validated GPU render path — use exactly this in the camera phase.** Load the EGL plugin by its **resolved file path** (the bare name string `p.loadPlugin("eglRendererPlugin")` fails with "cannot open shared object file"):
   ```python
   import pybullet as p, pkgutil
-  cid = p.connect(p.DIRECT)
+  p.connect(p.DIRECT)
   egl = pkgutil.get_loader("eglRenderer")
-  if egl is not None:
-      p.loadPlugin(egl.get_filename(), "_eglRendererPlugin")
+  plugin = p.loadPlugin(egl.get_filename(), "_eglRendererPlugin")   # plugin id >= 0 == loaded
+  # render frames with the hardware OpenGL renderer:
+  p.getCameraImage(w, h, renderer=p.ER_BULLET_HARDWARE_OPENGL)
   ```
-  Fall back to `p.ER_TINY_RENDERER` only if EGL is unavailable. Never depend on a GUI window for camera frames.
-- **Running under WSL2 (Ubuntu):** the design is unchanged, but get GPU rendering right before relying on Phase 5+:
-  - **Keep the repo in the WSL native filesystem** (`/home/<you>/...`), **not** under `/mnt/c/...`. Windows-mounted paths make git/pip/file I/O dramatically slower.
-  - Install GL/EGL system libraries: `sudo apt install -y libegl1 libgles2 libgl1-mesa-dri mesa-utils`.
-  - **Verify GPU OpenGL before Phase 5:** `glxinfo -B` should report an NVIDIA / D3D12 renderer — **not** `llvmpipe` (that's software). If you see `llvmpipe`, fix the WSL GPU drivers first; otherwise rendering three cameras will be slow.
-  - If the headless EGL plugin won't initialise under WSL2, prefer GUI mode (`p.connect(p.GUI)`), which renders through the GPU via WSLg — use that rather than silently accepting the `ER_TINY_RENDERER` CPU path for the three-camera workload. (Headless EGL is still preferred where it works, and remains required for any future CI/batch runs.)
-  - matplotlib top-down view and optional `cv2.imshow` windows display fine via WSLg — no extra setup.
+  On WSL2 the renderer string reports `GL_RENDERER = D3D12 (NVIDIA GeForce RTX 2080 Ti)` — **this is expected and IS hardware acceleration** (WSLg routes OpenGL → DirectX 12 → the NVIDIA card). Do **not** mistake the `D3D12`/`Microsoft` string for software (`llvmpipe`) and "fix" it.
+  - **Fallback only if EGL ever refuses the GPU on another machine** (e.g. the 4070 laptop): `p.connect(p.GUI)` renders through WSLg's display, also GPU-accelerated. Not needed on the desktop — EGL works there. Keep the headless EGL path as the default; it's also what any future CI needs.
+- **WSL hygiene:** keep the repo in the WSL native filesystem (it already is, at `~/codes`), never under `/mnt/c/...`. matplotlib and `cv2.imshow` windows display fine via WSLg, no extra setup.
 
 ---
 
@@ -99,7 +96,7 @@ pyhulax/
   _bridge.py         # INTERNAL: routes DroneAPI calls to the sim registry (not part of the public API)
 ```
 
-> Mission code only ever touches the public names below. Everything in `pyhulax/_bridge.py` and the whole `sim/` package (§ layout in 5) is internal plumbing.
+> Mission code only ever touches the public names below. Everything in `pyhulax/_bridge.py` and the whole `simcore/` package (§ layout in 5) is internal plumbing.
 
 ### 4.1 Discovery — `Dola` (in `pyhulax/__init__.py` or `pyhulax/discovery.py`)
 ```python
@@ -298,21 +295,24 @@ Created when a drone takes off. Origin = that drone's takeoff position and takeo
 ### 5.4 Process & threading model
 - **Single process.** The mission imports `pyhulax` (this package) and runs in the same process as the sim.
 - A **background sim thread** owns the PyBullet client and calls `stepSimulation()` at a fixed rate scaled by a configurable real-time factor (`>1` runs faster than real time for quick tests; `1.0` = real time). Rovers move, physics advances, and telemetry/drift update on this thread.
-- **All PyBullet calls happen on the sim thread.** PyBullet is not thread-safe. The `DroneAPI` facade (called from the mission thread, possibly several) pushes commands onto a thread-safe queue; the sim thread executes them and sets a completion `Event`. Camera renders (`getCameraImage`) also go through this queue.
-- **Blocking commands:** facade enqueues a goal, then waits on the completion event (with a sim-time timeout). The sim thread drives the drone toward the goal each step (simple kinematic motion at the speed implied by `VelocityLevel`), and signals completion on arrival. `blocking=False` returns a `CommandResult` immediately and the motion continues in the background.
-- **The shared world is a lazily-initialised singleton** (`sim/registry.py`) created from config on the first `connect()` or first UWB read. Both `pyhulax` and `UWBParserThread` attach to this one registry, so they describe the same world.
+- **All PyBullet calls happen on the sim thread.** PyBullet is not thread-safe. The `DroneAPI` / `UWBParserThread` implementations (called from the mission thread, possibly several) push commands onto a thread-safe queue; the sim thread executes them and sets a completion `Event`. Camera renders (`getCameraImage`) also go through this queue.
+- **Blocking commands:** the implementation enqueues a goal, then waits on the completion event (with a sim-time timeout). The sim thread drives the drone toward the goal each step (simple kinematic motion at the speed implied by `VelocityLevel`), and signals completion on arrival. `blocking=False` returns a `CommandResult` immediately and the motion continues in the background.
+- **The shared world is a lazily-initialised singleton** (`simcore/registry.py`) created from config on the first `connect()` or first UWB read. Both `pyhulax` and `UWBParserThread` attach to this one registry, so they describe the same world.
 
 ### 5.5 Repository layout (full)
+The simulator lives **inside the existing repo** at `~/codes/finals/sim/` (repo `Roboverse-Samabeenhacking-Project`, branch `finals`, auto-push hook on every commit). `finals/sim/` is the project root below; the internals package is named **`simcore`** (not `sim`, to avoid a confusing `finals/sim/sim/`).
+
 ```
-hula_sim/
+finals/sim/                # PROJECT ROOT — run all commands from here
   pyhulax/                 # DROP-IN SDK (public API only — §4)
     __init__.py            # exports DroneAPI, Dola
     core.py
     video.py
     exceptions.py
-    _bridge.py             # internal: facade -> registry
+    _bridge.py             # internal: DroneAPI -> simcore registry
   UWBParserThread.py       # DROP-IN UWB provider (top-level, matches real file)
-  sim/                     # SIMULATOR INTERNALS (mission never imports these)
+  simcore/                 # SIMULATOR INTERNALS (mission never imports these)
+    __init__.py
     registry.py            # the world singleton + command queue + sim thread
     config.py              # Config dataclass (all tunables, defaults) + YAML/env override
     arena.py               # procedural room/obstacle/pad generation (seeded)
@@ -330,6 +330,7 @@ hula_sim/
     log.py                 # sim logger (console + file)
   assets/                  # generated marker PNGs, rover billboard texture, floor texture
   scripts/
+    __init__.py
     run_sim.py             # boot world from config; optional live view; idle/keep-alive
     smoke_test.py          # connect -> takeoff -> square -> land (PROVES SIM RUNS)
     gen_assets.py          # (re)generate ArUco PNGs into assets/
@@ -338,8 +339,11 @@ hula_sim/
   sim_config.yaml          # user-editable overrides (arena size, pads, rovers, noise, ...)
   requirements.txt
   README.md
-  CLAUDE.md                # created in Phase 0
+  CLAUDE.md                # created in Phase 0 (sim-building session context)
+  HULA_SIM_BUILD_PLAN.md   # this document
 ```
+
+**The sim ↔ real swap is purely the import path — no code change.** Because `pyhulax/` and `UWBParserThread.py` sit in the project root, running any command from `~/codes/finals/sim` with `python -m ...` (which puts the project root on `sys.path`) makes `import pyhulax` / `from UWBParserThread import UWBParserThread` resolve to the **sim** versions. On the real C2 you instead `pip install` the real `pyhulax` and use the organisers' real `UWBParserThread.py`, with `finals/sim` **not** on the path — the mission code is byte-identical either way. Do **not** `pip install -e` the sim's `pyhulax` (it would shadow the real one); keep it path-based.
 
 ---
 
@@ -355,28 +359,34 @@ Each phase: **Deliverable → Files touched → Acceptance test (headless) → M
 
 `CLAUDE.md` content to create (condensed operating rules):
 ```
-# Hula Swarm Simulator — Claude Code context
+# Hula Swarm Simulator — Claude Code context (sim-building session)
 PURPOSE: build the SIM only (simulated world + drop-in pyhulax + UWB). NOT mission code.
+LIVES AT: ~/codes/finals/sim/  (repo branch: finals; auto-push hook on every commit).
+RUN EVERYTHING from ~/codes/finals/sim with `python -m ...` so `import pyhulax`
+  resolves to the sim package in this folder (that path-based import IS the sim/real swap).
+VENV: ~/sim-venv  (alias: simvenv).
 GOLDEN RULE: pyhulax/UWB public API must match the real SDK (see HULA_SIM_BUILD_PLAN.md §4) exactly.
-DO: work phase by phase; make each phase's test pass headless; commit; stop and report.
+DO: work phase by phase; make each phase's test pass headless; commit; STOP and report.
 DON'T: write landing/search/lock-on/swarm/YOLO logic. Don't change §4 signatures.
-RUN HEADLESS: PyBullet DIRECT + EGL plugin. No GUI dependency for camera frames.
-ALL PyBullet calls on the sim thread (registry.py). It is not thread-safe.
-CONFIG: sim/config.py defaults, overridable by sim_config.yaml / $HULA_SIM_CONFIG.
-TEST: pytest tests/ ; SMOKE: python -m hula_sim.scripts.smoke_test
+RENDER (camera phase): PyBullet DIRECT + EGL plugin loaded BY RESOLVED FILE PATH
+  (pkgutil.get_loader('eglRenderer').get_filename(), "_eglRendererPlugin"); render with
+  renderer=p.ER_BULLET_HARDWARE_OPENGL. On WSL2 GL_RENDERER='D3D12 (NVIDIA ...)' is GPU — normal.
+ALL PyBullet calls on the sim thread (simcore/registry.py). It is NOT thread-safe.
+CONFIG: simcore/config.py defaults, overridable by sim_config.yaml / $HULA_SIM_CONFIG.
+TEST: python -m pytest tests/      SMOKE: python -m scripts.smoke_test   (run from ~/codes/finals/sim)
 COMMIT FORMAT: feat/fix/docs/chore: what + why  (auto-push hook handles the push)
 ```
 
 ### Phase 1 — PyBullet world + procedural arena
 - **Deliverable:** `config.py`, `arena.py`, `world.py`, `registry.py` (world boot + sim thread + step loop + EGL), `clock.py`, `log.py`. Procedurally generate a seeded room: floor, four walls sized to config, N box/pillar obstacles (count/size/clearance from config), 3 drone bodies at configured start poses, 5 rover bodies at configured/ random positions. Drones/rovers are simple collision shapes for now (no camera/sensors yet). Real-time factor honoured.
 - **Acceptance test:** boot world from a fixed seed; assert body counts (walls, obstacles==config, drones==3, rovers==5); assert two runs with the same seed are identical and different seeds differ; assert the sim thread advances time.
-- **Manual check:** `python -m hula_sim.scripts.run_sim --seconds 2 --topdown out.png` saves a top-down screenshot of the generated arena.
+- **Manual check:** `python -m scripts.run_sim --seconds 2 --topdown out.png` saves a top-down screenshot of the generated arena.
 - **Commit:** `feat: procedural arena + pybullet world with stepping sim thread`.
 
 ### Phase 2 — Drone model + blocking command execution
 - **Deliverable:** `drone_model.py`, `_bridge.py`, real implementations of `connect`, `takeoff`, `land`, `hover`, `move`, `rotate`, `move_to`, and the command-queue/round-trip in `registry.py`. Kinematic motion at speeds mapped from `VelocityLevel` (define the m/s mapping in config). Blocking semantics per §5.4. Battery model (simple linear drain) feeding `get_battery`. Enforce `NotReady`/`LowBattery`.
 - **Acceptance test:** connect one drone; `takeoff(100)`; assert true height ≈ 1.0 m. `move(FORWARD, 100)`; assert displaced ~1 m along heading. `rotate(90)` then `move(FORWARD, 100)`; assert moved along the new heading (proves body-relative move). `move_to(0,0,150)` returns toward takeoff-frame origin column at 1.5 m. `land()`; assert grounded. Test `blocking=False` returns promptly while motion continues.
-- **Manual check:** `python -m hula_sim.scripts.smoke_test` (square pattern) completes without error.
+- **Manual check:** `python -m scripts.smoke_test` (square pattern) completes without error.
 - **Commit:** `feat: kinematic drone model with blocking pyhulax command execution`.
 
 ### Phase 3 — Frames, UWB drop-in, telemetry
@@ -392,7 +402,7 @@ COMMIT FORMAT: feat/fix/docs/chore: what + why  (auto-push hook handles the push
 - **Commit:** `feat: 5-direction barrier sensors and reflex avoidance (no depth/planner)`.
 
 ### Phase 5 — Camera rendering + ArUco pads
-- **Deliverable:** `aruco_assets.py` + `gen_assets.py` (generate ArUco PNGs with a white quiet-zone border; dictionary from config, default `DICT_4X4_50`), `camera.py` (per-drone camera via `getCameraImage` through the sim thread; intrinsics from config: resolution default 640×480, H-FOV default ~70°; pitch controlled by `set_camera_angle`, 0°=forward … 90°=down), and `VideoStream`/`VideoFrame`/`set_video_stream`/`create_video_stream`. Texture the landing pads with ArUco markers at the **configured pad coordinates + IDs**. Even, diffuse lighting so markers read cleanly.
+- **Deliverable:** `aruco_assets.py` + `gen_assets.py` (generate ArUco PNGs with a white quiet-zone border; dictionary from config, default `DICT_6X6_250` to match the organiser's sample; use the modern `cv2.aruco.ArucoDetector(dict, DetectorParameters())` API on grayscale, as the organiser sample does), `camera.py` (per-drone camera via `getCameraImage` through the sim thread; intrinsics from config: resolution default 640×480, H-FOV default ~70°; pitch controlled by `set_camera_angle`, 0°=forward … 90°=down), and `VideoStream`/`VideoFrame`/`set_video_stream`/`create_video_stream`. Texture the landing pads with ArUco markers at the **configured pad coordinates + IDs**. Even, diffuse lighting so markers read cleanly.
 - **Acceptance test:** position a drone above a pad, camera pitched down; pull `latest_frame.to_rgb()`; run `cv2.aruco.detectMarkers`; assert the pad's configured ID is detected with 4 corners. Assert `to_rgb` is `(H,W,3)` uint8 RGB and `to_bgr` differs in channel order. Assert changing `set_camera_angle` changes the view (forward vs down see different things).
 - **Manual check:** `gen_assets.py` writes PNGs; a script saves one rendered down-view frame with the detected marker drawn on it.
 - **Commit:** `feat: tiltable camera rendering + ArUco landing pads (real cv2.aruco detection)`.
@@ -406,7 +416,7 @@ COMMIT FORMAT: feat/fix/docs/chore: what + why  (auto-push hook handles the push
 ### Phase 7 — Scoring, top-down view, thrash monitor, full smoke run
 - **Deliverable:** `scoring.py` (referee per §7), `monitor.py` (command-rate / thrash), `viz.py` (live top-down: drones+paths, rovers, pads, covered area, banked marker IDs, current score), wired into `registry.py` and `run_sim.py` (toggleable, headless-safe). Extend `smoke_test.py` to fly all 3 drones over some markers and print a final scoreboard.
 - **Acceptance test:** drive a drone to hold a rover marker in view past the validity gate; assert the scorer banks that ID once and not twice; assert a second drive-by of the same ID does not increase the score; assert re-issuing motion commands faster than the threshold raises a thrash warning/count. Top-down renders to PNG headless.
-- **Manual check:** `python -m hula_sim.scripts.run_sim --live` shows the top-down updating; the extended smoke run ends with a non-zero unique-ID score and a thrash report.
+- **Manual check:** `python -m scripts.run_sim --live` shows the top-down updating; the extended smoke run ends with a non-zero unique-ID score and a thrash report.
 - **Commit:** `feat: referee scoring, top-down view, thrash monitor, full smoke run`.
 
 ### Phase 8 — Polish & docs
@@ -449,7 +459,7 @@ The sim is the **referee**. It scores **automatically from what each drone's cam
 - **Drift vs noise.** `get_position` drifts; UWB only has noise. If your UWB also drifts, the mission's correction logic can't be tested — keep them separate.
 - **Sim time, not wall time.** Blocking-command completion and timeouts use sim time scaled by the real-time factor, so faster-than-real runs still behave.
 - **Headless safety.** `run_sim`/viz must work with the live view disabled (for CI / batch). Never require a display for the core sim or camera.
-- **No mission leakage.** Keep `sim/` and `_bridge.py` out of the public API. The only things the mission imports are `pyhulax` and `UWBParserThread`.
+- **No mission leakage.** Keep `simcore/` and `_bridge.py` out of the public API. The only things the mission imports are `pyhulax` and `UWBParserThread`.
 
 ---
 
