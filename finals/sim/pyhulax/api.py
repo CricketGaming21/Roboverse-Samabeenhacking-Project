@@ -1,16 +1,20 @@
 """DroneAPI — the public control/telemetry surface of the (simulated) pyhulax SDK.
 
 Signatures are the hard contract from HULA_SIM_BUILD_PLAN.md §4.2–§4.5.
-Phase 0: every body raises NotImplementedError. Behaviour lands in Phases 2–5.
+Implemented so far: connection + control + battery (Phase 2). Telemetry
+beyond battery is Phase 3; obstacles Phase 4; camera/video Phase 5.
 
-Blocking semantics (Phase 2+): blocking commands return only once the move
-completes in SIM time (or times out); blocking=False returns immediately
-after the goal is accepted. Motion commands raise NotReady if not
-connected/flying and LowBattery below the configured threshold.
+Blocking semantics: blocking commands return only once the move completes in
+SIM time (or times out via the sim clock); blocking=False returns immediately
+after the goal is accepted and motion continues on the sim thread. Motion
+commands raise NotReady if not connected/flying and LowBattery below the
+configured threshold (land() is never battery-gated). led/flags arguments
+are accepted and ignored by the sim.
 """
 
 from typing import Optional, Union
 
+from . import _bridge
 from .core import (
     AIResult,
     BarrierMask,
@@ -26,6 +30,7 @@ from .core import (
     VelocityLevel,
     VisionMode,
 )
+from .exceptions import NotReady, TelemetryUnavailable
 from .video import VideoStream
 
 
@@ -33,7 +38,12 @@ class DroneAPI:
     """One instance controls one drone (bound by connect(ip))."""
 
     def __init__(self) -> None:
-        raise NotImplementedError
+        self._reg = None
+        self._drone = None
+
+    def _require_connection(self):
+        if self._drone is None:
+            raise NotReady("not connected — call connect(ip) first")
 
     # ------------------------------------------------------------------ #
     # Connection + control (blocking by default) — §4.2
@@ -44,18 +54,24 @@ class DroneAPI:
 
         Boots the shared sim world on first call.
         """
-        raise NotImplementedError
+        self._reg, self._drone = _bridge.connect(ip)
+        return CommandResult(True, f"connected to {ip}")
 
     def takeoff(self, height_cm: int = 100, led=None, blocking: bool = True,
                 flags: Union[TakeoffFlags, int] = TakeoffFlags.NONE) -> CommandResult:
-        raise NotImplementedError
+        self._require_connection()
+        return _bridge.submit(self._reg, self._drone, blocking, "takeoff",
+                              height_cm=height_cm, flags=int(flags))
 
     def land(self, led=None, blocking: bool = True) -> CommandResult:
-        raise NotImplementedError
+        self._require_connection()
+        return _bridge.submit(self._reg, self._drone, blocking, "land")
 
     def hover(self, duration_seconds: float, led=None,
               blocking: bool = True) -> CommandResult:
-        raise NotImplementedError
+        self._require_connection()
+        return _bridge.submit(self._reg, self._drone, blocking, "hover",
+                              duration_seconds=duration_seconds)
 
     def move(self, direction: Direction, distance_cm: float, led=None,
              blocking: bool = True,
@@ -64,12 +80,17 @@ class DroneAPI:
 
         FORWARD = nose direction (follows the nose after any rotate()).
         """
-        raise NotImplementedError
+        self._require_connection()
+        return _bridge.submit(self._reg, self._drone, blocking, "move",
+                              direction=direction, distance_cm=distance_cm,
+                              speed=speed)
 
     def rotate(self, angle_degrees: float, led=None,
                blocking: bool = True) -> CommandResult:
         """Yaw by angle. Positive = CCW (left), negative = CW (right)."""
-        raise NotImplementedError
+        self._require_connection()
+        return _bridge.submit(self._reg, self._drone, blocking, "rotate",
+                              angle_degrees=angle_degrees)
 
     def move_to(self, x: float, y: float, z: float, led=None,
                 blocking: bool = True,
@@ -79,7 +100,9 @@ class DroneAPI:
         (x = right, y = forward, z = up; relative to where this drone took
         off — the frame is fixed at takeoff and does NOT rotate with yaw.)
         """
-        raise NotImplementedError
+        self._require_connection()
+        return _bridge.submit(self._reg, self._drone, blocking, "move_to",
+                              x=x, y=y, z=z, speed=speed)
 
     # ------------------------------------------------------------------ #
     # Telemetry — §4.3 (each raises TelemetryUnavailable if no data yet)
@@ -101,8 +124,10 @@ class DroneAPI:
         raise NotImplementedError
 
     def get_battery(self) -> int:
-        """0-100."""
-        raise NotImplementedError
+        """0-100. Linear drain while flying (config drones.battery)."""
+        if self._drone is None:
+            raise TelemetryUnavailable("no telemetry before connect()")
+        return _bridge.read_battery(self._reg, self._drone)
 
     # ------------------------------------------------------------------ #
     # Obstacles (barrier sensors) — §4.4

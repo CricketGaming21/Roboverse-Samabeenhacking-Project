@@ -21,7 +21,7 @@ import time
 
 import pybullet as p
 
-from . import arena, frames, world
+from . import arena, drone_model, frames, world
 from .clock import SimClock
 from .config import SimConfig, load_config
 from .log import get_logger
@@ -43,6 +43,7 @@ class SimRegistry:
         self.client = None           # pybullet client id (set on sim thread)
         self.layout = None           # ArenaLayout (set during boot)
         self.bodies = None           # WorldBodies (set during boot)
+        self.drones = []             # [SimDrone] (set during boot)
         self.renderer = p.ER_TINY_RENDERER  # upgraded if the EGL plugin loads
         self._egl_plugin = -1
         self._calls = queue.Queue()  # (fn, result_box, done_event)
@@ -84,6 +85,22 @@ class SimRegistry:
     def sim_time(self) -> float:
         """Sim time in seconds since boot (advances at real_time_factor)."""
         return self.clock.now()
+
+    def is_alive(self) -> bool:
+        """True while the sim thread is running and accepting work."""
+        return self._thread.is_alive() and not self._stop.is_set()
+
+    def drone_by_ip(self, ip: str):
+        """The SimDrone configured with this IP, or None."""
+        for d in self.drones:
+            if d.spec.ip == ip:
+                return d
+        return None
+
+    def drone_world_pose(self, index: int):
+        """((x, y, z) world metres, yaw rad) TRUE pose — for tests/viz only."""
+        d = self.drones[index]
+        return self.run_on_sim_thread(lambda: (tuple(d.pos), float(d.yaw)))
 
     def body_count(self) -> int:
         """Total bodies in the PyBullet world (queried on the sim thread)."""
@@ -167,6 +184,17 @@ class SimRegistry:
         p.setTimeStep(cfg.physics.dt_s, physicsClientId=self.client)
         self.layout = arena.generate(cfg)
         self.bodies = world.build(self.client, cfg, self.layout)
+        hz = cfg.bodies.drone_half_extents_m[2]
+        self.drones = [
+            drone_model.SimDrone(
+                cfg=cfg, index=i, spec=spec, body_id=bid, client=self.client,
+                clock=self.clock,
+                start_pos=frames.arena_to_world(cfg, pose.north, pose.east, hz),
+                start_yaw=frames.heading_to_world_yaw_rad(cfg, pose.heading_deg))
+            for i, (spec, pose, bid) in enumerate(
+                zip(cfg.drones.units, self.layout.drone_starts,
+                    self.bodies.drones))
+        ]
         self._log.info(
             "world booted: seed=%s rtf=%.2f bodies=%d "
             "(walls=4 obstacles=%d drones=%d rovers=%d) renderer=%s",
@@ -260,6 +288,8 @@ class SimRegistry:
             for _ in range(min(behind, max_catchup)):
                 p.stepSimulation(physicsClientId=self.client)
                 self.clock.advance(dt)
+                for d in self.drones:
+                    d.step(dt)
                 steps += 1
 
         self._fail_pending_calls()
