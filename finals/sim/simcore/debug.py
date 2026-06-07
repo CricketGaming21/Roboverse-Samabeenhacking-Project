@@ -148,6 +148,7 @@ class DebugProbe:
         return {
             "index": rover.index,
             "marker_id": rover.marker_id,
+            "in_arena": rover.in_arena,   # False = staged off-map (DEPLOY)
             "arena_ne_m": _round3(rover.arena_position()),
             "world_xy": _round3(rover.pos[:2]),
             "yaw_rad": round(float(rover.yaw), 4),

@@ -220,6 +220,26 @@ class RoversConfig:
 
 
 @dataclass
+class AmbushTriggerConfig:
+    """How the AMBUSH (convoy) phase starts — SCENARIO-owned, never
+    mission-called (no pyhulax API can start it; see simcore/scenario.py)."""
+    mode: str = "on_all_landed"   # on_all_landed | timed | manual_key
+    delay_s: float = 3.0          # extra delay after the trigger event fires
+
+
+@dataclass
+class ScenarioConfig:
+    """Two-phase episode: DEPLOY (land on pads) -> AMBUSH (convoy) -> DONE."""
+    phases: str = "both"          # deploy | ambush | both
+    episode_seconds: float = 180.0  # total run length (sim time)
+    deploy_timeout_s: float = 90.0  # max part-1 time; then AMBUSH is forced
+    ambush_seconds: float = 120.0   # how long the convoy phase runs
+    entrance: list = field(default_factory=lambda: [0.5, 0.5])  # arena (n, e)
+    ambush_trigger: AmbushTriggerConfig = field(
+        default_factory=AmbushTriggerConfig)
+
+
+@dataclass
 class ScoringConfig:
     enabled: bool = True              # run the referee thread with the world
     mode: str = "auto"                # auto = sustained-visibility; explicit = capture hook
@@ -253,6 +273,7 @@ class SimConfig:
     meta: MetaConfig = field(default_factory=MetaConfig)
     physics: PhysicsConfig = field(default_factory=PhysicsConfig)
     bodies: BodiesConfig = field(default_factory=BodiesConfig)
+    scenario: ScenarioConfig = field(default_factory=ScenarioConfig)
     arena: ArenaConfig = field(default_factory=ArenaConfig)
     velocity_levels: VelocityLevelsConfig = field(default_factory=VelocityLevelsConfig)
     drones: DronesConfig = field(default_factory=DronesConfig)

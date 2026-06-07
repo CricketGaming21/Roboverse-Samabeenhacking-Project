@@ -11,6 +11,21 @@ meta:
   seed: 42                 # one seed drives arena gen, rover paths, noise, drift
   real_time_factor: 1.0    # 1.0 = real time; >1 runs faster for quick tests
 
+# --- Two-phase episode: DEPLOY (land) -> AMBUSH (convoy) -> DONE --------------
+# The ambush trigger is SCENARIO-owned (the organisers launch the convoy on the
+# real day) — mission code can never start it; there is no pyhulax API for it.
+scenario:
+  phases: both             # deploy | ambush | both
+  episode_seconds: 180     # total run length (sim time)
+  deploy_timeout_s: 90     # max time allowed for part 1; then AMBUSH is forced
+  ambush_seconds: 120      # how long the convoy phase runs
+  entrance: [0.5, 0.5]     # arena (north,east): drones launch / convoy enters
+  ambush_trigger:
+    mode: on_all_landed    # on_all_landed (ground truth + delay) | timed
+                           # (delay_s after episode start) | manual_key
+                           # (press 'a' in --live)
+    delay_s: 3.0           # extra delay after the trigger event fires
+
 # --- Arena: a rectangular room -----------------------------------------------
 arena:
   shape: rectangle

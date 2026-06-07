@@ -25,7 +25,8 @@ def _base_cfg():
     c = load_config("sim_config.yaml")
     c.meta.real_time_factor = 10.0
     c.scoring.enabled = False  # referee not under test here
-    return c
+    c.scenario.phases = "ambush"  # rovers active immediately (scenario is
+    return c                      # under test in test_phase10_scenario.py)
 
 
 @pytest.fixture()

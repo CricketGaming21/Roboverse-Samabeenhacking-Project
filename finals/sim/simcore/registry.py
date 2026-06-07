@@ -22,7 +22,7 @@ import time
 import pybullet as p
 
 from . import (arena, camera, drone_model, frames, monitor, rover_model,
-               scoring, world)
+               scenario, scoring, world)
 from .clock import SimClock
 from .config import SimConfig, load_config
 from .log import get_logger
@@ -49,6 +49,7 @@ class SimRegistry:
         self.rovers = []             # [SimRover] (set during boot)
         self.monitor = monitor.CommandMonitor(self.config, self.clock)
         self.referee = None          # started after boot if scoring.enabled
+        self.scenario = None         # episode state machine (set during boot)
         self.renderer = p.ER_TINY_RENDERER  # upgraded if the EGL plugin loads
         self._egl_plugin = -1
         self._calls = queue.Queue()  # (fn, result_box, done_event)
@@ -259,6 +260,8 @@ class SimRegistry:
             for i, (pose, bid) in enumerate(
                 zip(self.layout.rover_starts, self.bodies.rovers))
         ]
+        self.scenario = scenario.Scenario(self)
+        self.scenario.on_boot()
         self._log.info(
             "world booted: seed=%s rtf=%.2f bodies=%d "
             "(walls=4 obstacles=%d drones=%d rovers=%d) renderer=%s",
@@ -359,8 +362,10 @@ class SimRegistry:
                 self.clock.advance(dt)
                 for d in self.drones:
                     d.step(dt)
-                for r in self.rovers:
-                    r.step(dt)
+                if self.scenario.rovers_active():
+                    for r in self.rovers:
+                        r.step(dt)
+                self.scenario.step(self.clock.now())
                 steps += 1
 
         self._fail_pending_calls()

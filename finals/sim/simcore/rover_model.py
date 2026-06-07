@@ -53,16 +53,51 @@ class SimRover:
         self.yaw = frames.heading_to_world_yaw_rad(cfg, start_pose.heading_deg)
         self._target_w = None             # world (x, y) of current waypoint
         self._pause_until = clock.now() + self._pause_s
+        # Scenario staging (simcore/scenario.py): in DEPLOY the rovers wait
+        # OFF-MAP (inert, invisible, not targets) until the ambush begins.
+        self.in_arena = True
+        self._spawn_pos = self.pos.copy()
+        self._spawn_yaw = self.yaw
 
     def arena_position(self):
         """TRUE (north, east) metres."""
         return frames.world_to_arena(self.cfg, self.pos[0], self.pos[1])
 
     # ------------------------------------------------------------------ #
+    # Scenario staging — SIM THREAD ONLY (called by simcore/scenario.py)
+    # ------------------------------------------------------------------ #
+
+    def park_offmap(self, north: float, east: float) -> None:
+        """Stage the rover OUTSIDE the arena (DEPLOY: inert, not a target)."""
+        self.in_arena = False
+        wx, wy, _ = frames.arena_to_world(self.cfg, north, east, 0.0)
+        self.pos = np.array([wx, wy, self._half_z])
+        self._target_w = None
+        self._mirror()
+
+    def enter_arena(self) -> None:
+        """Bring the rover into the arena (AMBUSH begins). Phase 11 replaces
+        this teleport-to-spawn with the staggered convoy entry."""
+        self.in_arena = True
+        self.pos = self._spawn_pos.copy()
+        self.yaw = self._spawn_yaw
+        self._target_w = None
+        self._pause_until = self._clock.now() + self._pause_s
+        self._mirror()
+
+    def _mirror(self) -> None:
+        p.resetBasePositionAndOrientation(
+            self.body_id, self.pos.tolist(),
+            p.getQuaternionFromEuler([0.0, 0.0, self.yaw]),
+            physicsClientId=self._client)
+
+    # ------------------------------------------------------------------ #
     # Per-step motion — SIM THREAD ONLY
     # ------------------------------------------------------------------ #
 
     def step(self, dt: float) -> None:
+        if not self.in_arena:
+            return  # staged off-map (DEPLOY): inert by definition
         if self._speed <= 0.0:
             return  # parked (e.g. test configs)
         now = self._clock.now()

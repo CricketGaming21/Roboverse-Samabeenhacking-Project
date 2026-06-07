@@ -244,6 +244,17 @@ class TopDownView:
         self._log.info("live view running on the %s backend", detail)
         plt.ion()
         fig, ax = plt.subplots(figsize=(6, 9))
+        if getattr(self._reg, "scenario", None) is not None:
+            # OPERATOR hook for scenario.ambush_trigger.mode=manual_key —
+            # this is the keypress the spec means; it is not a mission API.
+            def _on_key(event):
+                if event.key == "a":
+                    self._reg.scenario.request_manual_trigger()
+                    self._log.info("operator pressed 'a': manual ambush "
+                                   "trigger requested")
+            fig.canvas.mpl_connect("key_press_event", _on_key)
+            self._log.info("press 'a' in the live window to trigger the "
+                           "ambush (when ambush_trigger.mode=manual_key)")
         period = 1.0 / float(self._cfg.viz.fps)
         end = None if duration_s is None else time.time() + duration_s
         try:

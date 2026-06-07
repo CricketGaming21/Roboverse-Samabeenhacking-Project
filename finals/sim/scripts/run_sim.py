@@ -87,6 +87,9 @@ def main(argv=None) -> None:
                  "on" if reg.referee else "off")
         log.info("note: run_sim observes a static-drone world (score stays "
                  "0); use smoke_test to see the scored canned flight")
+        log.info("scenario: phases=%s trigger=%s episode=%.0fs phase=%s",
+                 cfg.scenario.phases, cfg.scenario.ambush_trigger.mode,
+                 cfg.scenario.episode_seconds, reg.scenario.phase)
         if args.debug or args.dump:
             stop_debug = start_debug_loop(reg, print_text=args.debug,
                                           dump_path=args.dump)
@@ -102,8 +105,9 @@ def main(argv=None) -> None:
             if args.live:
                 log.warning("--live requested but viz.enabled is false")
             time.sleep(max(0.0, args.seconds))
-        log.info("sim time %.2fs (real_time_factor %.2f)",
-                 reg.sim_time(), cfg.meta.real_time_factor)
+        log.info("sim time %.2fs (real_time_factor %.2f) — scenario phase: %s",
+                 reg.sim_time(), cfg.meta.real_time_factor,
+                 reg.scenario.phase)
         if args.topdown:
             view.sample()
             view.render_png(args.topdown)
