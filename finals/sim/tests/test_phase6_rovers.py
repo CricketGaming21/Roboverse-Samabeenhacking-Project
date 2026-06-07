@@ -24,6 +24,7 @@ from simcore.registry import get_registry, shutdown_registry
 def _base_cfg():
     c = load_config("sim_config.yaml")
     c.meta.real_time_factor = 10.0
+    c.scoring.enabled = False  # referee not under test here
     return c
 
 

@@ -94,9 +94,10 @@ class SimDrone:
     """State + kinematic executor for one drone (sim-thread only mutation)."""
 
     def __init__(self, cfg, index, spec, body_id, client, clock,
-                 start_pos, start_yaw):
+                 start_pos, start_yaw, monitor=None):
         self.cfg = cfg
         self.index = index
+        self.monitor = monitor            # CommandMonitor (thrash watchdog)
         self.spec = spec                  # DroneSpec (ip, uwb_tag_id, ...)
         self.body_id = body_id
         self._client = client
@@ -425,9 +426,13 @@ class SimDrone:
                  speed_mps=speed_mps, yaw_rate_rps=yaw_rate_rps,
                  end_time=end_time,
                  deadline=now + est * _TIMEOUT_MARGIN + _TIMEOUT_BASE_S)
+        if self.monitor is not None and kind != "avoid_step":
+            self.monitor.record_command(self.index, kind)  # reflexes exempt
         if self.goal is not None:
             old = self.goal
             self._log.warning("%s preempted by %s", old.kind, kind)
+            if self.monitor is not None:
+                self.monitor.record_preempt(self.index, old.kind, kind)
             old.complete(False, f"preempted by {kind}")
         self.goal = g
         return g

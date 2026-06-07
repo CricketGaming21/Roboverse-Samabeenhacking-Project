@@ -26,6 +26,7 @@ from simcore.registry import get_registry, shutdown_registry
 def cfg():
     c = load_config("sim_config.yaml")
     c.meta.real_time_factor = 10.0
+    c.scoring.enabled = False  # referee not under test here
     c.camera.use_egl = False
     c.arena.obstacles.count = 0   # controlled arena: we spawn our own boxes
     c.rovers.count = 0

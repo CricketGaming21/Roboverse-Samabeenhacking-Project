@@ -21,7 +21,8 @@ import time
 
 import pybullet as p
 
-from . import arena, camera, drone_model, frames, rover_model, world
+from . import (arena, camera, drone_model, frames, monitor, rover_model,
+               scoring, world)
 from .clock import SimClock
 from .config import SimConfig, load_config
 from .log import get_logger
@@ -45,6 +46,8 @@ class SimRegistry:
         self.bodies = None           # WorldBodies (set during boot)
         self.drones = []             # [SimDrone] (set during boot)
         self.rovers = []             # [SimRover] (set during boot)
+        self.monitor = monitor.CommandMonitor(self.config, self.clock)
+        self.referee = None          # started after boot if scoring.enabled
         self.renderer = p.ER_TINY_RENDERER  # upgraded if the EGL plugin loads
         self._egl_plugin = -1
         self._calls = queue.Queue()  # (fn, result_box, done_event)
@@ -59,6 +62,9 @@ class SimRegistry:
                                f"{_BOOT_TIMEOUT_S}s")
         if self._boot_error is not None:
             raise self._boot_error
+        if self.config.scoring.enabled:
+            self.referee = scoring.Referee(self)
+            self.referee.start()
 
     # ------------------------------------------------------------------ #
     # Cross-thread access
@@ -184,7 +190,9 @@ class SimRegistry:
         self._log.info("top-down screenshot saved to %s", path)
 
     def shutdown(self) -> None:
-        """Stop the sim thread and disconnect PyBullet. Idempotent."""
+        """Stop the referee + sim thread and disconnect PyBullet. Idempotent."""
+        if self.referee is not None:
+            self.referee.stop()
         self._stop.set()
         self._thread.join(timeout=10)
         if self._thread.is_alive():
@@ -211,7 +219,8 @@ class SimRegistry:
                 cfg=cfg, index=i, spec=spec, body_id=bid, client=self.client,
                 clock=self.clock,
                 start_pos=frames.arena_to_world(cfg, pose.north, pose.east, hz),
-                start_yaw=frames.heading_to_world_yaw_rad(cfg, pose.heading_deg))
+                start_yaw=frames.heading_to_world_yaw_rad(cfg, pose.heading_deg),
+                monitor=self.monitor)
             for i, (spec, pose, bid) in enumerate(
                 zip(cfg.drones.units, self.layout.drone_starts,
                     self.bodies.drones))

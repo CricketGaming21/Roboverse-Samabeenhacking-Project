@@ -186,6 +186,7 @@ class RoversConfig:
 
 @dataclass
 class ScoringConfig:
+    enabled: bool = True              # run the referee thread with the world
     mode: str = "auto"                # auto = sustained-visibility; explicit = capture hook
     min_marker_px: int = 40
     frame_margin_px: int = 8

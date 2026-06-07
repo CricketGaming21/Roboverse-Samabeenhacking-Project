@@ -90,7 +90,7 @@ def _make_rover(client, cfg, pose, marker_id) -> int:
                               physicsClientId=client)
     marker_side = cfg.aruco.rover_marker_size_m * aruco_assets.texture_scale()
     quad = p.createVisualShape(
-        p.GEOM_MESH, fileName=aruco_assets.ensure_quad_obj(),
+        p.GEOM_MESH, fileName=aruco_assets.ensure_quad_obj(marker_id),
         meshScale=[marker_side, marker_side, 1.0],
         rgbaColor=(1.0, 1.0, 1.0, 1.0), physicsClientId=client)
     body = p.createMultiBody(
@@ -128,7 +128,7 @@ def _make_pad(client, cfg, pad) -> int:
                                  halfExtents=[side / 2, side / 2, _PAD_HALF_H],
                                  physicsClientId=client)
     vis = p.createVisualShape(
-        p.GEOM_MESH, fileName=aruco_assets.ensure_quad_obj(),
+        p.GEOM_MESH, fileName=aruco_assets.ensure_quad_obj(pad.id),
         meshScale=[side, side, 1.0], rgbaColor=_RGBA["pad"],
         visualFramePosition=[0.0, 0.0, _PAD_HALF_H + 0.001],  # just atop slab
         physicsClientId=client)

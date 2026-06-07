@@ -29,6 +29,7 @@ def cfg():
     c = load_config("sim_config.yaml")
     c.meta.real_time_factor = 10.0  # sim-time semantics identical, tests faster
     c.camera.use_egl = False        # no rendering needed in this phase
+    c.scoring.enabled = False       # referee not under test here
     return c
 
 

@@ -101,9 +101,15 @@ def ensure_billboard_png(path: str) -> str:
     return str(f)
 
 
-def ensure_quad_obj(out_dir: str = "assets") -> str:
-    """Write (once) and return the unit textured-quad mesh path."""
-    path = Path(out_dir) / "unit_quad.obj"
+def ensure_quad_obj(marker_id: int, out_dir: str = "assets") -> str:
+    """Write (once) and return a textured-quad mesh path UNIQUE to marker_id.
+
+    PyBullet caches visual shapes by (fileName, meshScale): two quads built
+    from the same OBJ share one graphics instance and end up with the SAME
+    texture, silently making every pad/rover display one id. A per-id file
+    keeps each marker's graphics asset (and thus its texture) its own.
+    """
+    path = Path(out_dir) / f"unit_quad_id{int(marker_id)}.obj"
     if not path.is_file():
         path.parent.mkdir(parents=True, exist_ok=True)
         path.write_text(_QUAD_OBJ)

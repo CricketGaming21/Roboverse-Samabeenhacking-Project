@@ -28,6 +28,7 @@ PAD_ID = 10
 def cfg():
     c = load_config("sim_config.yaml")
     c.meta.real_time_factor = 10.0
+    c.scoring.enabled = False  # referee not under test here
     c.arena.obstacles.count = 0  # clean sight lines, deterministic views
     c.rovers.count = 0
     return c
