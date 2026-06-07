@@ -30,27 +30,29 @@ arena:
     keepclear_radius_m: 1.0  # no obstacles within this radius of pads/drone starts
 
 # --- Speed mapping for VelocityLevel -----------------------------------------
+# NOTE: the pyhulax VelocityLevel enum value is a position-controller P-GAIN
+# (SLOW=300, MEDIUM, ZOOM=100, TURBO=50 — LOWER int = FASTER), NOT a speed.
+# These are the SIM's real-world speeds per level (TURBO fastest). The sim maps
+# by level NAME via this table; it must never treat the enum int as a speed.
 velocity_levels:           # m/s the kinematic model uses per pyhulax speed level
   SLOW: 0.3
   MEDIUM: 0.6
-  ZOOM: 1.0                # pyhulax default
-  TURBO: 1.5
+  ZOOM: 1.0                # pyhulax default level
+  TURBO: 1.5               # fastest
   yaw_rate_dps: 60.0       # rotate() angular speed
 
 # --- Drones (3) --------------------------------------------------------------
 # start positions in arena frame (north, east); heading_deg 0 = facing +north.
-# NOTE: per-drone entries live under drones.units (a bare list can't share the
-# `drones:` key with takeoff/battery settings in valid YAML).
 drones:
-  units:
-    - { ip: "10.0.0.11", uwb_tag_id: 0, start: [0.6, 1.5], heading_deg: 0.0 }
-    - { ip: "10.0.0.12", uwb_tag_id: 1, start: [0.6, 3.0], heading_deg: 0.0 }
-    - { ip: "10.0.0.13", uwb_tag_id: 2, start: [0.6, 4.5], heading_deg: 0.0 }
   takeoff_height_cm: 100
   battery:
     start_pct: 100
     drain_pct_per_min: 8.0
     low_threshold_pct: 10  # below this, motion commands raise LowBattery
+  units:                   # one entry per drone (list under a key — valid YAML)
+    - { ip: "10.0.0.11", uwb_tag_id: 0, start: [0.6, 1.5], heading_deg: 0.0 }
+    - { ip: "10.0.0.12", uwb_tag_id: 1, start: [0.6, 3.0], heading_deg: 0.0 }
+    - { ip: "10.0.0.13", uwb_tag_id: 2, start: [0.6, 4.5], heading_deg: 0.0 }
 
 # --- UWB tag (matches UWBParserThread + its doc) -----------------------------
 uwb:
