@@ -152,8 +152,9 @@ class SimDrone:
         self.flying = True
         target = self.pos.copy()
         target[2] = self.takeoff_frame.oz + height_cm / 100.0
+        # Confirmed asymmetric vertical speeds: climb 1.2 m/s.
         return self._install("takeoff", target_pos=self._clamp_z(target),
-                             speed_mps=speed_to_mps(self.cfg, VelocityLevel.ZOOM))
+                             speed_mps=float(self.cfg.velocity_levels.climb_mps))
 
     def goal_land(self) -> Goal:
         # Always allowed while flying — never battery-gated.
@@ -161,8 +162,9 @@ class SimDrone:
         self._require_flying("land")
         target = self.pos.copy()
         target[2] = self._ground_z + self._half_z
+        # Confirmed asymmetric vertical speeds: descend 1.0 m/s.
         return self._install("land", target_pos=target,
-                             speed_mps=speed_to_mps(self.cfg, VelocityLevel.ZOOM))
+                             speed_mps=float(self.cfg.velocity_levels.descent_mps))
 
     def goal_hover(self, duration_seconds: float) -> Goal:
         self._require_connected()

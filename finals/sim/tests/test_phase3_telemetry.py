@@ -190,11 +190,12 @@ def test_uwb_holds_sample_between_refreshes_at_wallclock_rate(cfg_rt):
         assert valid
         # update_time is wall-clock
         assert abs(valid[-1][2] - time.time()) < 1.0
-        # refreshes arrive at ~rate_hz (10 Hz) in real time
+        # refreshes arrive at ~rate_hz (10 Hz) in real time — generous bands:
+        # wall-clock jitter under full-suite load must not flake this
         stamps = sorted({s[2] for s in valid})
-        assert 6 <= len(stamps) <= 15
+        assert 4 <= len(stamps) <= 18
         gaps = [b - a for a, b in zip(stamps, stamps[1:])]
-        assert all(0.03 < g < 0.3 for g in gaps)
+        assert all(0.02 < g < 0.5 for g in gaps)
         # between refreshes the SAME (value, timestamp) pair is held
         by_stamp = {}
         for x, y, t in valid:

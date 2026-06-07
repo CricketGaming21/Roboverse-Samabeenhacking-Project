@@ -43,9 +43,15 @@ class PhysicsConfig:
 
 @dataclass
 class BodiesConfig:
-    """Primitive collision-body sizes (defaults only — not in sim_config.yaml)."""
+    """Primitive collision-body sizes (defaults only — not in sim_config.yaml).
+
+    Drone dims CONFIRMED from the HG-F09 manual: 189 x 185 x 50 mm, 100 g.
+    The mass is recorded for fidelity; bodies stay kinematic (mass 0 in
+    PyBullet) because motion is reset-driven, not force-driven.
+    """
     drone_half_extents_m: list = field(
-        default_factory=lambda: [0.09, 0.09, 0.04])   # ~18 cm square micro-drone
+        default_factory=lambda: [0.095, 0.0925, 0.025])  # 0.19 x 0.185 x 0.05 m
+    drone_mass_kg: float = 0.10
     rover_half_extents_m: list = field(
         default_factory=lambda: [0.16, 0.12, 0.135])  # ~RoboMaster S1 footprint
 
@@ -107,12 +113,23 @@ class ArenaConfig:
 
 @dataclass
 class VelocityLevelsConfig:
-    """m/s the kinematic model uses per pyhulax speed level."""
+    """m/s per pyhulax speed level. CONFIRMED: the Hula HG-F09's
+    programming-mode speed band is 0.5-1.0 m/s (official manual) — capped
+    at 1.0; SLOW sits below the band for gentle moves."""
     SLOW: float = 0.3
-    MEDIUM: float = 0.6
-    ZOOM: float = 1.0
-    TURBO: float = 1.5
+    MEDIUM: float = 0.5
+    ZOOM: float = 0.8
+    TURBO: float = 1.0
     yaw_rate_dps: float = 60.0
+    climb_mps: float = 1.2            # confirmed asymmetric vertical speeds
+    descent_mps: float = 1.0
+
+
+@dataclass
+class MotionConfig:
+    """Airframe motion realism (Phase 18 consumes these; the value is the
+    confirmed spec). max_tilt_deg is BODY tilt-to-translate — not camera."""
+    max_tilt_deg: float = 20.0
 
 
 @dataclass
@@ -127,7 +144,7 @@ class DroneSpec:
 @dataclass
 class BatteryConfig:
     start_pct: int = 100
-    drain_pct_per_min: float = 8.0
+    drain_pct_per_min: float = 10.0   # confirmed ~9-10 min flight time
     low_threshold_pct: int = 10
 
 
@@ -176,9 +193,14 @@ class BarrierSensorsConfig:
 
 @dataclass
 class CameraConfig:
+    # 640x480 is the Hula's LOW / "AI mode" resolution — the default for
+    # detection. 1280x720 (MED) / 1920x1080 (HIGH) extend ArUco range
+    # (~3.4 m / ~5.0 m for the 0.15 m marker at the 40 px gate vs ~1.7 m
+    # at 640) at higher latency. FOV 71° CONFIRMED from the manual —
+    # still verify once on the real drone with a marker at known distance.
     width: int = 640
     height: int = 480
-    h_fov_deg: float = 70.0
+    h_fov_deg: float = 71.0
     near_m: float = 0.05
     far_m: float = 25.0
     default_pitch_deg: float = 0.0    # 0 = forward, 90 = straight down
@@ -309,6 +331,7 @@ class SimConfig:
     physics: PhysicsConfig = field(default_factory=PhysicsConfig)
     bodies: BodiesConfig = field(default_factory=BodiesConfig)
     scenario: ScenarioConfig = field(default_factory=ScenarioConfig)
+    motion: MotionConfig = field(default_factory=MotionConfig)
     arena: ArenaConfig = field(default_factory=ArenaConfig)
     velocity_levels: VelocityLevelsConfig = field(default_factory=VelocityLevelsConfig)
     drones: DronesConfig = field(default_factory=DronesConfig)

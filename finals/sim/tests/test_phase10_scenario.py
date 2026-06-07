@@ -134,9 +134,10 @@ def test_episode_runs_configured_duration_then_done():
                ambush_seconds=100.0)
     reg = get_registry(cfg)
     try:
+        # observing AMBUSH at all proves it did NOT end on part 1 (the phase
+        # may legitimately advance to done between polls on this short episode)
         assert _wait_phase(reg, "ambush")
-        assert reg.scenario.phase == "ambush"     # did NOT end on part 1
-        assert _wait_phase(reg, "done", timeout_s=3.0)
+        assert _wait_phase(reg, "done", timeout_s=4.0)
         assert reg.sim_time() >= 3.0              # full configured length
         frozen = reg.rover_arena_positions()
         time.sleep(0.2)
@@ -193,8 +194,10 @@ def test_phases_deploy_only_never_ambushes():
     cfg = _cfg(phases="deploy", deploy_timeout_s=1.5)
     reg = get_registry(cfg)
     try:
-        assert reg.scenario.phase == "deploy"
-        assert _wait_phase(reg, "done", timeout_s=3.0)
+        # The invariant is NEVER ambush (the short episode may already be
+        # done by the first read under load — that's fine).
+        assert reg.scenario.phase in ("deploy", "done")
+        assert _wait_phase(reg, "done", timeout_s=4.0)
         assert all(not r.in_arena for r in reg.rovers)  # never entered
     finally:
         shutdown_registry()

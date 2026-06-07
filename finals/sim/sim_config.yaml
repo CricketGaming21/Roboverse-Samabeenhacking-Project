@@ -62,12 +62,19 @@ arena:
 # (SLOW=300, MEDIUM, ZOOM=100, TURBO=50 — LOWER int = FASTER), NOT a speed.
 # These are the SIM's real-world speeds per level (TURBO fastest). The sim maps
 # by level NAME via this table; it must never treat the enum int as a speed.
-velocity_levels:           # m/s the kinematic model uses per pyhulax speed level
-  SLOW: 0.3
-  MEDIUM: 0.6
-  ZOOM: 1.0                # pyhulax default level
-  TURBO: 1.5               # fastest
+# CONFIRMED (HG-F09 manual): programming-mode speed band is 0.5-1.0 m/s.
+velocity_levels:           # m/s per pyhulax speed level, capped at 1.0
+  SLOW: 0.3                # below the band, for gentle moves
+  MEDIUM: 0.5
+  ZOOM: 0.8                # pyhulax default level
+  TURBO: 1.0               # the real cap
   yaw_rate_dps: 60.0       # rotate() angular speed
+  climb_mps: 1.2           # confirmed asymmetric vertical: climb 1.2 m/s
+  descent_mps: 1.0         #                                descend 1.0 m/s
+
+# --- Airframe motion (Phase 18 realism consumes these) ------------------------
+motion:
+  max_tilt_deg: 20.0       # confirmed max BODY tilt (tilt-to-translate)
 
 # --- Drones (3) --------------------------------------------------------------
 # start positions in arena frame (north, east); heading_deg 0 = facing +north.
@@ -75,7 +82,7 @@ drones:
   takeoff_height_cm: 100
   battery:
     start_pct: 100
-    drain_pct_per_min: 8.0
+    drain_pct_per_min: 10.0  # confirmed ~9-10 min flight time
     low_threshold_pct: 10  # below this, motion commands raise LowBattery
   units:                   # one entry per drone (list under a key — valid YAML)
     # Clustered at the SW entrance (the same spot the convoy enters), ~0.5 m
@@ -109,10 +116,13 @@ barrier_sensors:
   min_altitude_m: 0.35     # below this, barriers report clear (like the real sensors)
 
 # --- Camera (tiltable front/down, monocular RGB) -----------------------------
+# 640x480 is the Hula's LOW / "AI mode" resolution — the default for detection.
+# 1280x720 / 1920x1080 extend ArUco range (~3.4 m / ~5.0 m for the 0.15 m
+# marker at the 40 px gate, vs ~1.7 m at 640) at higher latency.
 camera:
   width: 640
   height: 480
-  h_fov_deg: 70.0          # placeholder until measured on the real drone
+  h_fov_deg: 71.0          # CONFIRMED (manual); verify once on the real drone
   near_m: 0.05
   far_m: 25.0
   default_pitch_deg: 0.0   # 0 = forward, 90 = straight down (set_camera_angle)
