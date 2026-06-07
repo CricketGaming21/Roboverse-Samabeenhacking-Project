@@ -1,4 +1,295 @@
-"""The world singleton + command queue + sim thread. ALL PyBullet calls happen here (PyBullet is not thread-safe). Phase 1.
+"""The shared world: sim thread + command queue + lazily-initialised singleton.
 
 Simulator INTERNAL — mission code must never import simcore.
+
+THE ONE-THREAD RULE: every pybullet.* call happens on the sim thread owned by
+SimRegistry. Anything else (pyhulax facade, UWB thread, tests, scripts) hands
+work over via run_on_sim_thread() and waits for the result. Mixing threads
+silently corrupts PyBullet state or segfaults.
+
+The step loop is fixed-timestep (physics.dt_s of SIM time per step) and paces
+itself against the wall clock scaled by meta.real_time_factor: rtf 2.0 runs
+the sim twice as fast as real time. If rendering or load makes it fall behind,
+it catches up by stepping multiple times per iteration (bounded by
+physics.max_catchup_steps) and re-anchors if hopelessly behind.
 """
+
+import pkgutil
+import queue
+import threading
+import time
+
+import pybullet as p
+
+from . import arena, frames, world
+from .clock import SimClock
+from .config import SimConfig, load_config
+from .log import get_logger
+
+_BOOT_TIMEOUT_S = 30.0
+_CALL_TIMEOUT_S = 10.0
+
+
+class SimRegistry:
+    """Owns the PyBullet client, the world, the clock, and the sim thread.
+
+    Constructing one boots the world (on the sim thread) and starts stepping.
+    """
+
+    def __init__(self, config: SimConfig = None) -> None:
+        self.config = config if config is not None else load_config()
+        self._log = get_logger("registry", self.config)
+        self.clock = SimClock()
+        self.client = None           # pybullet client id (set on sim thread)
+        self.layout = None           # ArenaLayout (set during boot)
+        self.bodies = None           # WorldBodies (set during boot)
+        self.renderer = p.ER_TINY_RENDERER  # upgraded if the EGL plugin loads
+        self._egl_plugin = -1
+        self._calls = queue.Queue()  # (fn, result_box, done_event)
+        self._stop = threading.Event()
+        self._boot_done = threading.Event()
+        self._boot_error = None
+        self._thread = threading.Thread(target=self._sim_loop,
+                                        name="hula-sim", daemon=True)
+        self._thread.start()
+        if not self._boot_done.wait(_BOOT_TIMEOUT_S):
+            raise RuntimeError("sim world failed to boot within "
+                               f"{_BOOT_TIMEOUT_S}s")
+        if self._boot_error is not None:
+            raise self._boot_error
+
+    # ------------------------------------------------------------------ #
+    # Cross-thread access
+    # ------------------------------------------------------------------ #
+
+    def run_on_sim_thread(self, fn, timeout: float = _CALL_TIMEOUT_S):
+        """Execute fn() on the sim thread and return its result.
+
+        This is the only legal way to touch PyBullet from outside the sim
+        thread. Exceptions raised by fn propagate to the caller.
+        """
+        if threading.current_thread() is self._thread:
+            return fn()  # already on the sim thread (re-entrant call)
+        if self._stop.is_set() or not self._thread.is_alive():
+            raise RuntimeError("sim thread is not running")
+        box = {}
+        done = threading.Event()
+        self._calls.put((fn, box, done))
+        if not done.wait(timeout):
+            raise TimeoutError(f"sim-thread call timed out after {timeout}s")
+        if "error" in box:
+            raise box["error"]
+        return box.get("result")
+
+    def sim_time(self) -> float:
+        """Sim time in seconds since boot (advances at real_time_factor)."""
+        return self.clock.now()
+
+    def body_count(self) -> int:
+        """Total bodies in the PyBullet world (queried on the sim thread)."""
+        return self.run_on_sim_thread(
+            lambda: p.getNumBodies(physicsClientId=self.client))
+
+    def snapshot_body_poses(self):
+        """[(kind, position, orientation), ...] for every body — for tests/viz."""
+        def _snap():
+            out = []
+            b = self.bodies
+            for kind, ids in (("floor", (b.floor,)), ("wall", b.walls),
+                              ("obstacle", b.obstacles), ("drone", b.drones),
+                              ("rover", b.rovers)):
+                for bid in ids:
+                    pos, orn = p.getBasePositionAndOrientation(
+                        bid, physicsClientId=self.client)
+                    out.append((kind, pos, orn))
+            return out
+        return self.run_on_sim_thread(_snap)
+
+    def save_topdown_png(self, path: str, width: int = 900,
+                         height: int = 900) -> None:
+        """Render a straight-down view of the arena to a PNG (headless-safe).
+
+        Minimal Phase 1 screenshot; the live top-down view is Phase 7.
+        Image up = arena north, image right = arena east.
+        """
+        import math
+
+        import numpy as np
+        from PIL import Image
+
+        cfg = self.config
+
+        def _render():
+            L, W = cfg.arena.length_m, cfg.arena.width_m
+            t = cfg.arena.wall_thickness_m
+            cx, cy, _ = frames.arena_to_world(cfg, L / 2, W / 2, 0.0)
+            radius = math.hypot(L / 2 + t, W / 2 + t) + 0.3
+            fov_deg = 60.0
+            aspect = width / height
+            # Camera altitude so the whole room fits in the narrower axis.
+            alt = radius / (math.tan(math.radians(fov_deg / 2))
+                            * min(1.0, aspect))
+            view = p.computeViewMatrix(
+                cameraEyePosition=[cx, cy, alt],
+                cameraTargetPosition=[cx, cy, 0.0],
+                cameraUpVector=[0.0, 1.0, 0.0])
+            proj = p.computeProjectionMatrixFOV(
+                fov=fov_deg, aspect=aspect, nearVal=0.1, farVal=alt + 10.0)
+            img = p.getCameraImage(width, height, viewMatrix=view,
+                                   projectionMatrix=proj,
+                                   renderer=self.renderer,
+                                   physicsClientId=self.client)
+            rgba = np.asarray(img[2], dtype=np.uint8).reshape(height, width, 4)
+            return rgba[:, :, :3].copy()
+        rgb = self.run_on_sim_thread(_render, timeout=60)
+        Image.fromarray(rgb).save(path)
+        self._log.info("top-down screenshot saved to %s", path)
+
+    def shutdown(self) -> None:
+        """Stop the sim thread and disconnect PyBullet. Idempotent."""
+        self._stop.set()
+        self._thread.join(timeout=10)
+        if self._thread.is_alive():
+            self._log.warning("sim thread did not exit cleanly")
+
+    # ------------------------------------------------------------------ #
+    # Sim thread
+    # ------------------------------------------------------------------ #
+
+    def _boot(self) -> None:
+        cfg = self.config
+        self.client = p.connect(p.DIRECT)
+        if self.client < 0:
+            raise RuntimeError("pybullet DIRECT connect failed")
+        self._load_egl()
+        p.setGravity(0.0, 0.0, cfg.physics.gravity_mps2,
+                     physicsClientId=self.client)
+        p.setTimeStep(cfg.physics.dt_s, physicsClientId=self.client)
+        self.layout = arena.generate(cfg)
+        self.bodies = world.build(self.client, cfg, self.layout)
+        self._log.info(
+            "world booted: seed=%s rtf=%.2f bodies=%d "
+            "(walls=4 obstacles=%d drones=%d rovers=%d) renderer=%s",
+            cfg.meta.seed, cfg.meta.real_time_factor, self.bodies.total,
+            len(self.bodies.obstacles), len(self.bodies.drones),
+            len(self.bodies.rovers),
+            "EGL/GPU" if self._egl_plugin >= 0 else "TinyRenderer")
+
+    def _load_egl(self) -> None:
+        """Load the EGL hardware-render plugin by RESOLVED FILE PATH (§3).
+
+        The bare name string fails with 'cannot open shared object file'.
+        On WSL2, GL_RENDERER='D3D12 (NVIDIA ...)' IS hardware acceleration.
+        Falls back to TinyRenderer (slow CPU) with a warning if unavailable.
+        """
+        if not self.config.camera.use_egl:
+            self._log.info("EGL disabled by config; using TinyRenderer")
+            return
+        try:
+            egl = pkgutil.get_loader("eglRenderer")
+            if egl is not None:
+                self._egl_plugin = p.loadPlugin(
+                    egl.get_filename(), "_eglRendererPlugin",
+                    physicsClientId=self.client)
+        except Exception as e:  # never let render setup kill the sim
+            self._log.warning("EGL plugin load raised: %s", e)
+            self._egl_plugin = -1
+        if self._egl_plugin >= 0:
+            self.renderer = p.ER_BULLET_HARDWARE_OPENGL
+        else:
+            self._log.warning(
+                "EGL renderer unavailable — falling back to TinyRenderer "
+                "(slow CPU rendering)")
+
+    def _drain_calls(self) -> None:
+        while True:
+            try:
+                fn, box, done = self._calls.get_nowait()
+            except queue.Empty:
+                return
+            try:
+                box["result"] = fn()
+            except BaseException as e:  # propagate to the caller, keep stepping
+                box["error"] = e
+            done.set()
+
+    def _fail_pending_calls(self) -> None:
+        while True:
+            try:
+                _, box, done = self._calls.get_nowait()
+            except queue.Empty:
+                return
+            box["error"] = RuntimeError("sim shut down")
+            done.set()
+
+    def _sim_loop(self) -> None:
+        try:
+            self._boot()
+        except BaseException as e:
+            self._boot_error = e
+            self._boot_done.set()
+            if self.client is not None and self.client >= 0:
+                p.disconnect(physicsClientId=self.client)
+            return
+        self._boot_done.set()
+
+        dt = self.config.physics.dt_s
+        rtf = self.config.meta.real_time_factor
+        max_catchup = self.config.physics.max_catchup_steps
+        wall_per_step = dt / rtf
+        anchor = time.perf_counter()  # wall instant where sim step 0 is due
+        steps = 0
+
+        while not self._stop.is_set():
+            self._drain_calls()
+            behind = int((time.perf_counter() - anchor) / wall_per_step) - steps
+            if behind <= 0:
+                # Ahead of schedule: sleep until the next step is due
+                # (capped so we stay responsive to calls and stop).
+                due = anchor + (steps + 1) * wall_per_step
+                delay = due - time.perf_counter()
+                if delay > 0:
+                    self._stop.wait(min(delay, 0.05))
+                continue
+            if behind > max_catchup * 10:
+                self._log.warning(
+                    "sim thread fell %d steps behind; re-anchoring "
+                    "(real_time_factor %.2f may be too high)", behind, rtf)
+                anchor = time.perf_counter() - steps * wall_per_step
+                continue
+            for _ in range(min(behind, max_catchup)):
+                p.stepSimulation(physicsClientId=self.client)
+                self.clock.advance(dt)
+                steps += 1
+
+        self._fail_pending_calls()
+        if self._egl_plugin >= 0:
+            p.unloadPlugin(self._egl_plugin, physicsClientId=self.client)
+        p.disconnect(physicsClientId=self.client)
+
+
+# --------------------------------------------------------------------------- #
+# Lazily-initialised shared singleton (§5.4) — what pyhulax/_bridge and the
+# UWB drop-in attach to, so they all describe the same world.
+# --------------------------------------------------------------------------- #
+
+_registry = None
+_registry_lock = threading.Lock()
+
+
+def get_registry(config: SimConfig = None) -> SimRegistry:
+    """Return the shared world, creating it from config on first use."""
+    global _registry
+    with _registry_lock:
+        if _registry is None:
+            _registry = SimRegistry(config)
+        return _registry
+
+
+def shutdown_registry() -> None:
+    """Tear down the shared world (tests / interpreter exit)."""
+    global _registry
+    with _registry_lock:
+        if _registry is not None:
+            _registry.shutdown()
+            _registry = None

@@ -34,6 +34,23 @@ class MetaConfig:
 
 
 @dataclass
+class PhysicsConfig:
+    """Sim-thread stepping (defaults only — not surfaced in sim_config.yaml)."""
+    dt_s: float = 1.0 / 240.0         # fixed physics timestep (sim time)
+    gravity_mps2: float = -9.81
+    max_catchup_steps: int = 24       # max physics steps per loop iteration when behind
+
+
+@dataclass
+class BodiesConfig:
+    """Primitive collision-body sizes (defaults only — not in sim_config.yaml)."""
+    drone_half_extents_m: list = field(
+        default_factory=lambda: [0.09, 0.09, 0.04])   # ~18 cm square micro-drone
+    rover_half_extents_m: list = field(
+        default_factory=lambda: [0.16, 0.12, 0.135])  # ~RoboMaster S1 footprint
+
+
+@dataclass
 class ObstaclesConfig:
     count: int = 8
     footprint_min_m: float = 0.3
@@ -132,6 +149,7 @@ class CameraConfig:
     far_m: float = 25.0
     default_pitch_deg: float = 0.0    # 0 = forward, 90 = straight down
     fps: int = 30
+    use_egl: bool = True              # load the EGL hardware-render plugin at boot
 
 
 @dataclass
@@ -196,6 +214,8 @@ class LoggingConfig:
 class SimConfig:
     """Root config object — single source of truth for every tunable."""
     meta: MetaConfig = field(default_factory=MetaConfig)
+    physics: PhysicsConfig = field(default_factory=PhysicsConfig)
+    bodies: BodiesConfig = field(default_factory=BodiesConfig)
     arena: ArenaConfig = field(default_factory=ArenaConfig)
     velocity_levels: VelocityLevelsConfig = field(default_factory=VelocityLevelsConfig)
     drones: DronesConfig = field(default_factory=DronesConfig)
