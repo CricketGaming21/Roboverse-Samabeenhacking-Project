@@ -39,10 +39,13 @@ velocity_levels:           # m/s the kinematic model uses per pyhulax speed leve
 
 # --- Drones (3) --------------------------------------------------------------
 # start positions in arena frame (north, east); heading_deg 0 = facing +north.
+# NOTE: per-drone entries live under drones.units (a bare list can't share the
+# `drones:` key with takeoff/battery settings in valid YAML).
 drones:
-  - { ip: "10.0.0.11", uwb_tag_id: 0, start: [0.6, 1.5], heading_deg: 0.0 }
-  - { ip: "10.0.0.12", uwb_tag_id: 1, start: [0.6, 3.0], heading_deg: 0.0 }
-  - { ip: "10.0.0.13", uwb_tag_id: 2, start: [0.6, 4.5], heading_deg: 0.0 }
+  units:
+    - { ip: "10.0.0.11", uwb_tag_id: 0, start: [0.6, 1.5], heading_deg: 0.0 }
+    - { ip: "10.0.0.12", uwb_tag_id: 1, start: [0.6, 3.0], heading_deg: 0.0 }
+    - { ip: "10.0.0.13", uwb_tag_id: 2, start: [0.6, 4.5], heading_deg: 0.0 }
   takeoff_height_cm: 100
   battery:
     start_pct: 100

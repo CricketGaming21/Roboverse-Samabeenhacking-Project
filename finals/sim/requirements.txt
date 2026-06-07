@@ -1,0 +1,9 @@
+# Hula Swarm Simulator — frozen dependency set (Python 3.10, venv ~/sim-venv)
+numpy==2.2.6
+opencv-contrib-python==4.13.0.92
+pillow==12.2.0
+pybullet==3.2.7
+scipy==1.15.3
+pyyaml
+matplotlib
+pytest
