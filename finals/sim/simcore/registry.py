@@ -21,7 +21,7 @@ import time
 
 import pybullet as p
 
-from . import arena, drone_model, frames, world
+from . import arena, camera, drone_model, frames, world
 from .clock import SimClock
 from .config import SimConfig, load_config
 from .log import get_logger
@@ -102,6 +102,14 @@ class SimRegistry:
         d = self.drones[index]
         return self.run_on_sim_thread(lambda: (tuple(d.pos), float(d.yaw)))
 
+    def render_camera(self, drone):
+        """One (H, W, 3) uint8 RGB frame from a drone's tiltable camera,
+        rendered on the sim thread with the active renderer (EGL or Tiny)."""
+        return self.run_on_sim_thread(
+            lambda: camera.render_rgb(self.client, self.config, drone,
+                                      self.renderer),
+            timeout=30)
+
     def uwb_truth(self):
         """[(uwb_tag_id, north, east), ...] TRUE arena positions, one atomic
         sim-thread read — the UWB drop-in samples this each refresh."""
@@ -121,7 +129,7 @@ class SimRegistry:
             b = self.bodies
             for kind, ids in (("floor", (b.floor,)), ("wall", b.walls),
                               ("obstacle", b.obstacles), ("drone", b.drones),
-                              ("rover", b.rovers)):
+                              ("rover", b.rovers), ("pad", b.pads)):
                 for bid in ids:
                     pos, orn = p.getBasePositionAndOrientation(
                         bid, physicsClientId=self.client)

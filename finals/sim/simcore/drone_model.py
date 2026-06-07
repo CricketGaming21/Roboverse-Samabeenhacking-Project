@@ -22,8 +22,9 @@ import threading
 import numpy as np
 import pybullet as p
 
-from pyhulax.core import (BarrierMask, CommandResult, Direction, DroneState,
-                          Obstacles, Orientation, Vector3, VelocityLevel)
+from pyhulax.core import (BarrierMask, CameraPitchMode, CommandResult,
+                          Direction, DroneState, Obstacles, Orientation,
+                          Vector3, VelocityLevel)
 from pyhulax.exceptions import LowBattery, NotReady, PyhulaxError
 
 from . import frames, sensors
@@ -125,6 +126,10 @@ class SimDrone:
         # Reflexes (§4.4) — both route through the SAME committing executor.
         self.barrier_mode = False         # firmware auto-avoid (stop short)
         self.avoidance_rule = None        # (Direction, distance_m, mask) or None
+
+        # Camera (§4.5): tiltable pitch, 0 = forward .. 90 = straight down.
+        self.camera_pitch_deg = float(cfg.camera.default_pitch_deg)
+        self.video_enabled = False        # set_video_stream(True/False)
 
     # ------------------------------------------------------------------ #
     # Goal installers — SIM THREAD ONLY (called via run_on_sim_thread).
@@ -322,6 +327,30 @@ class SimDrone:
                                    int(barrier_mask))
         else:
             self.avoidance_rule = None
+
+    # ------------------------------------------------------------------ #
+    # Camera (§4.5) — SIM THREAD ONLY
+    # ------------------------------------------------------------------ #
+
+    def set_camera_pitch(self, mode, angle: float) -> float:
+        """Tilt the main camera. Sim models pitch 0 (forward) .. 90 (down);
+        tilting above the horizon clamps to 0. Returns the new pitch."""
+        m = CameraPitchMode(int(mode))
+        a = float(angle)
+        if m == CameraPitchMode.DOWN_ABSOLUTE:
+            pitch = a
+        elif m == CameraPitchMode.UP_ABSOLUTE:
+            pitch = -a  # angle 0 = straight ahead; above-horizon clamps to 0
+        elif m == CameraPitchMode.DOWN_RELATIVE:
+            pitch = self.camera_pitch_deg + a
+        elif m == CameraPitchMode.UP_RELATIVE:
+            pitch = self.camera_pitch_deg - a
+        elif m == CameraPitchMode.CALIBRATE:
+            pitch = float(self.cfg.camera.default_pitch_deg)
+        else:
+            raise PyhulaxError(f"unsupported CameraPitchMode: {mode!r}")
+        self.camera_pitch_deg = min(max(pitch, 0.0), 90.0)
+        return self.camera_pitch_deg
 
     def _run_reflexes(self) -> None:
         """Both reflexes route through the SAME committing executor — no

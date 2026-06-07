@@ -150,6 +150,7 @@ class CameraConfig:
     default_pitch_deg: float = 0.0    # 0 = forward, 90 = straight down
     fps: int = 30
     use_egl: bool = True              # load the EGL hardware-render plugin at boot
+    mount_offset_m: float = 0.10      # front-mounted: lens sits ahead of centre
 
 
 @dataclass

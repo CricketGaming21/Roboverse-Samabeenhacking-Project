@@ -121,6 +121,25 @@ def takeoff_cm_to_arena(cfg, fr: TakeoffFrame, x_cm: float, y_cm: float,
 # Body frame is FLU: nose = +x, left = +y, up = +z. After any rotate(),
 # FORWARD follows the new nose — callers pass the CURRENT world yaw.
 
+# --------------------------------------------------------------------------- #
+# Camera geometry (§4.5) — the ONE place drone pose composes with pitch
+# --------------------------------------------------------------------------- #
+# Front-mounted tiltable camera: pitch 0 = straight ahead along the nose,
+# 90 = straight down. At pitch 90 the image 'up' direction is the nose.
+
+def camera_eye_target_up(cfg, pos, yaw_rad: float, pitch_deg: float):
+    """(eye, target, up) world vectors for computeViewMatrix."""
+    pr = math.radians(pitch_deg)
+    cy, sy = math.cos(yaw_rad), math.sin(yaw_rad)
+    cp, sp = math.cos(pr), math.sin(pr)
+    fwd = (cy * cp, sy * cp, -sp)        # view direction, pitched down
+    up = (cy * sp, sy * sp, cp)          # camera up, stays perpendicular
+    off = float(cfg.camera.mount_offset_m)
+    eye = (pos[0] + cy * off, pos[1] + sy * off, pos[2])
+    target = (eye[0] + fwd[0], eye[1] + fwd[1], eye[2] + fwd[2])
+    return eye, target, up
+
+
 _BODY_DIRS = {
     Direction.FORWARD: (1.0, 0.0, 0.0),
     Direction.BACK: (-1.0, 0.0, 0.0),

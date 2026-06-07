@@ -7,7 +7,7 @@ Mission code does `import pyhulax` / `from UWBParserThread import UWBParserThrea
 unchanged; running from this folder puts the sim versions on the path — that
 path-based import IS the sim/real swap (see `HULA_SIM_BUILD_PLAN.md` §5.5).
 
-**Status: Phase 4 (barrier sensors + reflex avoidance).**
+**Status: Phase 5 (tiltable camera rendering + ArUco landing pads).**
 Behaviour lands phase by phase per `HULA_SIM_BUILD_PLAN.md` §6. Full docs in Phase 8.
 
 ```bash

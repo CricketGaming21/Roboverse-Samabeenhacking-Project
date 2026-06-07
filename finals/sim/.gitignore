@@ -1,5 +1,5 @@
 __pycache__/
 .pytest_cache/
 logs/
-out.png
+out*.png
 assets/*.png

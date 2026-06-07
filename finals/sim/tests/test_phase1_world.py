@@ -102,7 +102,9 @@ def test_world_body_counts(cfg, registry):
     assert len(b.obstacles) == cfg.arena.obstacles.count
     assert len(b.drones) == len(cfg.drones.units) == 3
     assert len(b.rovers) == cfg.rovers.count == 5
-    expected = 1 + 4 + cfg.arena.obstacles.count + 3 + cfg.rovers.count
+    assert len(b.pads) == len(cfg.pads) == 3
+    expected = (1 + 4 + cfg.arena.obstacles.count + 3 + cfg.rovers.count
+                + len(cfg.pads))
     assert registry.body_count() == b.total == expected
 
 

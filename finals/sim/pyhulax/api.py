@@ -189,13 +189,17 @@ class DroneAPI:
     def set_camera_angle(self, mode: CameraPitchMode, angle: int = 0) -> CommandResult:
         """Tilt the main camera. angle in degrees 0-90 (DOWN_ABSOLUTE 90 =
         straight down, UP_ABSOLUTE 0 = straight ahead)."""
-        raise NotImplementedError
+        self._require_connection()
+        return _bridge.set_camera_angle(self._reg, self._drone, mode, angle)
 
     def create_video_stream(self) -> VideoStream:
-        raise NotImplementedError
+        """Stream of real rendered frames from this drone's tiltable camera."""
+        self._require_connection()
+        return VideoStream(self._reg, self._drone)
 
     def set_video_stream(self, enabled: bool) -> CommandResult:
-        raise NotImplementedError
+        self._require_connection()
+        return _bridge.set_video_enabled(self._reg, self._drone, enabled)
 
     # ------------------------------------------------------------------ #
     # Edu features present in the real SDK — surface kept complete, but

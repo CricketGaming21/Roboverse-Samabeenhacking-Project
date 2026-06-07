@@ -89,3 +89,14 @@ def set_avoidance(reg, drone, direction, distance_cm, barrier_mask) -> CommandRe
     armed = distance_cm and float(distance_cm) > 0
     return CommandResult(True, "avoidance rule armed" if armed
                                else "avoidance rule disarmed")
+
+
+def set_camera_angle(reg, drone, mode, angle) -> CommandResult:
+    pitch = reg.run_on_sim_thread(lambda: drone.set_camera_pitch(mode, angle))
+    return CommandResult(True, f"camera pitch {pitch:.0f} deg")
+
+
+def set_video_enabled(reg, drone, enabled: bool) -> CommandResult:
+    reg.run_on_sim_thread(lambda: setattr(drone, "video_enabled",
+                                          bool(enabled)))
+    return CommandResult(True, f"video stream {'on' if enabled else 'off'}")

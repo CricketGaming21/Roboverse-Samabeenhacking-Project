@@ -12,9 +12,10 @@ from dataclasses import dataclass
 
 import pybullet as p
 
-from . import frames
+from . import aruco_assets, frames
 
 _FLOOR_HALF_H = 0.05  # thin static slab; its top face is exactly z = 0
+_PAD_HALF_H = 0.005   # landing pads: 1 cm slabs lying flat on the floor
 
 _RGBA = {
     "floor": (0.85, 0.85, 0.88, 1.0),
@@ -22,6 +23,7 @@ _RGBA = {
     "obstacle": (0.85, 0.50, 0.15, 1.0),
     "drone": (0.15, 0.35, 0.90, 1.0),
     "rover": (0.80, 0.10, 0.10, 1.0),
+    "pad": (1.0, 1.0, 1.0, 1.0),  # white: texture colours pass through as-is
 }
 
 
@@ -33,11 +35,12 @@ class WorldBodies:
     obstacles: tuple
     drones: tuple
     rovers: tuple
+    pads: tuple
 
     @property
     def total(self) -> int:
         return 1 + len(self.walls) + len(self.obstacles) + len(self.drones) \
-            + len(self.rovers)
+            + len(self.rovers) + len(self.pads)
 
 
 def _make_box(client, cfg, north, east, z_center, half_n, half_e, half_h,
@@ -72,8 +75,33 @@ def _make_agent_box(client, cfg, pose, half_extents, rgba):
                              baseOrientation=orn, physicsClientId=client)
 
 
+def _make_pad(client, cfg, pad) -> int:
+    """ArUco landing pad: textured slab flat on the floor, facing up, at the
+    CONFIGURED arena coordinates. Pad side is sized so the printed marker
+    (incl. black border) measures exactly aruco.pad_marker_size_m. The visual
+    is a UV-mapped quad (GEOM_BOX auto-UVs would crop the marker)."""
+    side = cfg.aruco.pad_marker_size_m * aruco_assets.texture_scale()
+    pos = frames.arena_to_world(cfg, pad.north, pad.east, _PAD_HALF_H)
+    orn = p.getQuaternionFromEuler([0.0, 0.0, frames.arena_yaw_world_rad(cfg)])
+    col = p.createCollisionShape(p.GEOM_BOX,
+                                 halfExtents=[side / 2, side / 2, _PAD_HALF_H],
+                                 physicsClientId=client)
+    vis = p.createVisualShape(
+        p.GEOM_MESH, fileName=aruco_assets.ensure_quad_obj(),
+        meshScale=[side, side, 1.0], rgbaColor=_RGBA["pad"],
+        visualFramePosition=[0.0, 0.0, _PAD_HALF_H + 0.001],  # just atop slab
+        physicsClientId=client)
+    body = p.createMultiBody(baseMass=0, baseCollisionShapeIndex=col,
+                             baseVisualShapeIndex=vis, basePosition=pos,
+                             baseOrientation=orn, physicsClientId=client)
+    tex = p.loadTexture(aruco_assets.ensure_marker_png(cfg, pad.id),
+                        physicsClientId=client)
+    p.changeVisualShape(body, -1, textureUniqueId=tex, physicsClientId=client)
+    return body
+
+
 def build(client: int, cfg, layout) -> WorldBodies:
-    """Create floor, walls, obstacles, drones, rovers. Sim thread only."""
+    """Create floor, walls, obstacles, pads, drones, rovers. Sim thread only."""
     L, W, t = layout.length_m, layout.width_m, layout.wall_thickness_m
 
     floor = _make_box(client, cfg, L / 2, W / 2, -_FLOOR_HALF_H,
@@ -99,5 +127,7 @@ def build(client: int, cfg, layout) -> WorldBodies:
                         _RGBA["rover"])
         for pose in layout.rover_starts)
 
+    pads = tuple(_make_pad(client, cfg, pad) for pad in cfg.pads)
+
     return WorldBodies(floor=floor, walls=walls, obstacles=obstacles,
-                       drones=drones, rovers=rovers)
+                       drones=drones, rovers=rovers, pads=pads)
