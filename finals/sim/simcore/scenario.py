@@ -137,12 +137,19 @@ class Scenario:
     def _enter_ambush(self, now: float, reason: str) -> None:
         self.phase = AMBUSH
         self.ambush_started_at = now
-        for rover in self._reg.rovers:
-            if not rover.in_arena:
-                rover.enter_arena()
+        convoy = self._reg.config.rovers.motion == "convoy"
+        entrance_e = float(self._cfg.entrance[1])
+        for i, rover in enumerate(self._reg.rovers):
+            if convoy and rover.in_arena:
+                # phases=ambush boots skip DEPLOY parking — stage off-map
+                # anyway so the convoy still ENTERS from the entrance.
+                rover.park_offmap(_STAGE_NORTH0_M - i * _STAGE_PITCH_M,
+                                  entrance_e)
+            rover.activate(now)  # convoy: arm staggered entry; patrol: enter
         self._log.info(
-            "phase AMBUSH at t=%.1fs (%s): %d rovers active for %.0fs",
-            now, reason, len(self._reg.rovers), self._cfg.ambush_seconds)
+            "phase AMBUSH at t=%.1fs (%s): %d rovers (%s) active for %.0fs",
+            now, reason, len(self._reg.rovers),
+            self._reg.config.rovers.motion, self._cfg.ambush_seconds)
 
     def _enter_done(self, now: float, reason: str) -> None:
         self.phase = DONE

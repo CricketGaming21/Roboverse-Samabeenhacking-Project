@@ -26,7 +26,8 @@ def _base_cfg():
     c.meta.real_time_factor = 10.0
     c.scoring.enabled = False  # referee not under test here
     c.scenario.phases = "ambush"  # rovers active immediately (scenario is
-    return c                      # under test in test_phase10_scenario.py)
+    c.rovers.motion = "patrol"    # under test in test_phase10_scenario.py;
+    return c                      # this suite covers the retained patrol)
 
 
 @pytest.fixture()

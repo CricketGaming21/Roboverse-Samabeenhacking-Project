@@ -22,6 +22,8 @@ def _cfg(**scenario_overrides):
     c.meta.real_time_factor = 10.0
     c.camera.use_egl = False
     c.scoring.enabled = False
+    c.rovers.motion = "patrol"  # scenario mechanics under test here;
+    # convoy routing has its own suite in test_phase11_convoy.py
     for key, value in scenario_overrides.items():
         if key in ("mode", "delay_s"):
             setattr(c.scenario.ambush_trigger, key, value)

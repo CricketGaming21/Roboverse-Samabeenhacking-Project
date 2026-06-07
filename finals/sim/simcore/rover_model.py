@@ -1,16 +1,19 @@
-"""Rover agents: waypoint-random patrol + unique top-face ArUco markers.
+"""Rover agents: convoy routing / random patrol + unique top ArUco markers.
 
 Simulator INTERNAL — mission code must never import simcore.
 
-NOT mission logic: rovers are world actors the mission has to find. Motion is
-advanced on the SIM THREAD only (step(dt) from the registry loop), paced in
-sim time, seeded per rover from the one config seed.
+NOT mission logic: rovers are world actors the mission has to find. They
+follow FIXED configured routes — no evasion, no reacting to drones. Motion
+is advanced on the SIM THREAD only (step(dt) from the registry loop).
 
-Patrol (config.rovers.patrol, mode waypoint_random): pick a random waypoint
-inside bounds_north x bounds_east whose straight-line path stays clear of the
-generated obstacles (sampled-segment check — sim realism, not a planner),
-drive there at speed_mps facing the direction of travel, pause
-waypoint_pause_s, repeat. speed_mps = 0 parks the rovers (handy for tests).
+TWO MOTION MODES (config rovers.motion):
+- "convoy" (DEFAULT, matches the Phase-2 image): in AMBUSH the rovers enter
+  one by one from scenario.entrance (staggered entry_stagger_s apart, a
+  convoy column), follow the shared trunk to split_index, then each follows
+  its own authored branch, then loiters (loop the branch | hold at the end).
+  Purely config-driven and deterministic — no RNG anywhere.
+- "patrol" (back-compat flag): the original seeded waypoint_random wander
+  within patrol bounds. speed_mps = 0 parks the rovers (handy for tests).
 """
 
 import math
@@ -23,6 +26,27 @@ from . import arena, frames
 _WAYPOINT_TRIES = 50
 _OBSTACLE_CLEAR_M = 0.3   # keep the path this far from obstacle footprints
 _SEGMENT_STEP_M = 0.2     # sampling pitch of the straight-path clearance check
+
+_MOTION_MODES = ("convoy", "patrol")
+_LOITER_MODES = ("loop", "hold")
+
+
+def convoy_route(cfg, rover_index: int):
+    """The full authored route for one rover, arena (north, east):
+    entrance -> shared trunk (to split_index) -> its own branch.
+    Pure config — used by the rover itself and by the route-clearance test."""
+    cv = cfg.rovers.convoy
+    if not (0 <= cv.split_index < len(cv.trunk)):
+        raise ValueError(f"rovers.convoy.split_index {cv.split_index} out of "
+                         f"range for a {len(cv.trunk)}-waypoint trunk")
+    if rover_index >= len(cv.branches):
+        raise ValueError(f"rovers.convoy.branches has {len(cv.branches)} "
+                         f"entries — need one per rover (index {rover_index})")
+    shared = [tuple(w) for w in cv.trunk[:cv.split_index + 1]]
+    branch = [tuple(w) for w in cv.branches[rover_index]]
+    if not branch:
+        raise ValueError(f"rovers.convoy.branches[{rover_index}] is empty")
+    return [tuple(cfg.scenario.entrance)] + shared + branch
 
 
 class SimRover:
@@ -59,6 +83,25 @@ class SimRover:
         self._spawn_pos = self.pos.copy()
         self._spawn_yaw = self.yaw
 
+        # Convoy mode (rovers.motion: convoy): fixed authored route.
+        self._motion = cfg.rovers.motion
+        if self._motion not in _MOTION_MODES:
+            raise ValueError(f"unknown rovers.motion: {self._motion!r}")
+        if self._motion == "convoy":
+            cv = cfg.rovers.convoy
+            if cv.loiter not in _LOITER_MODES:
+                raise ValueError(f"unknown rovers.convoy.loiter: "
+                                 f"{cv.loiter!r}")
+            self._convoy_speed = float(cv.speed_mps)
+            waypoints_ne = convoy_route(cfg, index)[1:]  # after the entrance
+            self._route_w = [
+                np.array(frames.arena_to_world(cfg, n, e, 0.0)[:2])
+                for n, e in waypoints_ne]
+            self._loop_from = cv.split_index + 1  # first branch wp index
+            self._loiter = cv.loiter
+            self._entry_time = None   # sim time this rover enters (staggered)
+            self._wp_i = 0            # current route waypoint (None = holding)
+
     def arena_position(self):
         """TRUE (north, east) metres."""
         return frames.world_to_arena(self.cfg, self.pos[0], self.pos[1])
@@ -75,9 +118,18 @@ class SimRover:
         self._target_w = None
         self._mirror()
 
+    def activate(self, now: float) -> None:
+        """AMBUSH begins (called by the scenario). Convoy: arm the staggered
+        entry (rover k enters k * entry_stagger_s after now). Patrol
+        (back-compat): the old teleport-to-spawn."""
+        if self._motion == "convoy":
+            self._entry_time = (now + self.index
+                                * float(self.cfg.rovers.convoy.entry_stagger_s))
+        else:
+            self.enter_arena()
+
     def enter_arena(self) -> None:
-        """Bring the rover into the arena (AMBUSH begins). Phase 11 replaces
-        this teleport-to-spawn with the staggered convoy entry."""
+        """Teleport to the layout spawn (patrol mode's AMBUSH entry)."""
         self.in_arena = True
         self.pos = self._spawn_pos.copy()
         self.yaw = self._spawn_yaw
@@ -96,6 +148,9 @@ class SimRover:
     # ------------------------------------------------------------------ #
 
     def step(self, dt: float) -> None:
+        if self._motion == "convoy":
+            self._step_convoy(dt)
+            return
         if not self.in_arena:
             return  # staged off-map (DEPLOY): inert by definition
         if self._speed <= 0.0:
@@ -123,7 +178,50 @@ class SimRover:
             physicsClientId=self._client)
 
     # ------------------------------------------------------------------ #
-    # Waypoint sampling
+    # Convoy driving (fixed route, deterministic, no RNG)
+    # ------------------------------------------------------------------ #
+
+    def _step_convoy(self, dt: float) -> None:
+        now = self._clock.now()
+        if not self.in_arena:
+            if self._entry_time is None or now < self._entry_time:
+                return  # not armed / waiting its staggered slot
+            # Enter the arena AT the entrance (never teleport mid-arena).
+            en, ee = self.cfg.scenario.entrance
+            wx, wy, _ = frames.arena_to_world(self.cfg, float(en), float(ee),
+                                              0.0)
+            self.in_arena = True
+            self.pos = np.array([wx, wy, self._half_z])
+            first = self._route_w[0]
+            self.yaw = math.atan2(first[1] - wy, first[0] - wx)
+            self._wp_i = 0
+            self._mirror()
+            return
+        if self._wp_i is None:
+            return  # loiter: hold at the branch end
+        target = self._route_w[self._wp_i]
+        self._target_w = target
+        delta = target - self.pos[:2]
+        dist = float(np.hypot(delta[0], delta[1]))
+        step_len = self._convoy_speed * dt
+        if dist <= step_len:
+            self.pos[:2] = target
+            nxt = self._wp_i + 1
+            if nxt >= len(self._route_w):
+                if self._loiter == "loop":
+                    self._wp_i = self._loop_from  # cycle the branch
+                else:
+                    self._wp_i = None             # hold at the end
+                    self._target_w = None
+            else:
+                self._wp_i = nxt
+        else:
+            self.pos[:2] += delta * (step_len / dist)
+            self.yaw = math.atan2(delta[1], delta[0])
+        self._mirror()
+
+    # ------------------------------------------------------------------ #
+    # Waypoint sampling (patrol mode)
     # ------------------------------------------------------------------ #
 
     def _pick_waypoint(self, now: float):

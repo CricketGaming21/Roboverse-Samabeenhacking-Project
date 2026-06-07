@@ -203,6 +203,27 @@ class PadSpec:
 
 
 @dataclass
+class ConvoyConfig:
+    """Fixed convoy routes (rovers.motion: convoy): staggered entry from
+    scenario.entrance, shared trunk, per-rover branches, loiter. The routes
+    are AUTHORED to thread between the crate clusters — nudge coordinates
+    here, never add evasion logic."""
+    entry_stagger_s: float = 2.0      # gap between successive rovers entering
+    speed_mps: float = 0.4
+    trunk: list = field(default_factory=lambda: [
+        [1.0, 0.8], [2.5, 1.5], [4.0, 2.0]])
+    split_index: int = 2              # after trunk[split_index], branch off
+    branches: list = field(default_factory=lambda: [
+        [[5.0, 1.0], [7.0, 1.0]],
+        [[5.5, 2.2], [6.5, 3.2], [8.0, 3.6]],
+        [[4.0, 4.4], [6.0, 5.0], [8.5, 5.0]],
+        [[4.0, 4.0], [3.0, 5.0]],
+        [[5.5, 2.5], [8.0, 2.0]],
+    ])
+    loiter: str = "loop"              # loop the branch | hold at the end
+
+
+@dataclass
 class PatrolConfig:
     mode: str = "waypoint_random"
     speed_mps: float = 0.4
@@ -216,6 +237,8 @@ class RoversConfig:
     count: int = 5
     marker_ids: list = field(default_factory=lambda: [20, 21, 22, 23, 24])
     billboard_texture: str = "assets/robomaster.png"
+    motion: str = "convoy"            # convoy (fixed routes, DEFAULT) | patrol (random, back-compat)
+    convoy: ConvoyConfig = field(default_factory=ConvoyConfig)
     patrol: PatrolConfig = field(default_factory=PatrolConfig)
 
 
