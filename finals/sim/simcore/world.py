@@ -75,6 +75,47 @@ def _make_agent_box(client, cfg, pose, half_extents, rgba):
                              baseOrientation=orn, physicsClientId=client)
 
 
+def _make_rover(client, cfg, pose, marker_id) -> int:
+    """Rover body: billboard-textured box + this rover's UNIQUE ArUco marker
+    on the top face (UV quad as a fixed link, facing up — same approach as
+    the pads, so it decodes). One pybullet body per rover."""
+    hx, hy, hz = cfg.bodies.rover_half_extents_m
+    pos = frames.arena_to_world(cfg, pose.north, pose.east, hz)
+    orn = p.getQuaternionFromEuler(
+        [0.0, 0.0, frames.heading_to_world_yaw_rad(cfg, pose.heading_deg)])
+    col = p.createCollisionShape(p.GEOM_BOX, halfExtents=[hx, hy, hz],
+                                 physicsClientId=client)
+    vis = p.createVisualShape(p.GEOM_BOX, halfExtents=[hx, hy, hz],
+                              rgbaColor=(1.0, 1.0, 1.0, 1.0),
+                              physicsClientId=client)
+    marker_side = cfg.aruco.rover_marker_size_m * aruco_assets.texture_scale()
+    quad = p.createVisualShape(
+        p.GEOM_MESH, fileName=aruco_assets.ensure_quad_obj(),
+        meshScale=[marker_side, marker_side, 1.0],
+        rgbaColor=(1.0, 1.0, 1.0, 1.0), physicsClientId=client)
+    body = p.createMultiBody(
+        baseMass=0, baseCollisionShapeIndex=col, baseVisualShapeIndex=vis,
+        basePosition=pos, baseOrientation=orn,
+        linkMasses=[0], linkCollisionShapeIndices=[-1],
+        linkVisualShapeIndices=[quad],
+        linkPositions=[[0.0, 0.0, hz + 0.002]],   # just above the top face
+        linkOrientations=[[0, 0, 0, 1]],
+        linkInertialFramePositions=[[0, 0, 0]],
+        linkInertialFrameOrientations=[[0, 0, 0, 1]],
+        linkParentIndices=[0], linkJointTypes=[p.JOINT_FIXED],
+        linkJointAxis=[[0, 0, 1]], physicsClientId=client)
+    billboard = p.loadTexture(
+        aruco_assets.ensure_billboard_png(cfg.rovers.billboard_texture),
+        physicsClientId=client)
+    p.changeVisualShape(body, -1, textureUniqueId=billboard,
+                        physicsClientId=client)
+    marker = p.loadTexture(aruco_assets.ensure_marker_png(cfg, marker_id),
+                           physicsClientId=client)
+    p.changeVisualShape(body, 0, textureUniqueId=marker,
+                        physicsClientId=client)
+    return body
+
+
 def _make_pad(client, cfg, pad) -> int:
     """ArUco landing pad: textured slab flat on the floor, facing up, at the
     CONFIGURED arena coordinates. Pad side is sized so the printed marker
@@ -122,10 +163,16 @@ def build(client: int, cfg, layout) -> WorldBodies:
                         _RGBA["drone"])
         for pose in layout.drone_starts)
 
+    marker_ids = list(cfg.rovers.marker_ids)
+    n_rovers = len(layout.rover_starts)
+    if len(marker_ids) < n_rovers:
+        raise ValueError(f"rovers.marker_ids has {len(marker_ids)} ids for "
+                         f"{n_rovers} rovers")
+    if len(set(marker_ids[:n_rovers])) != n_rovers:
+        raise ValueError(f"rover marker ids must be unique: {marker_ids}")
     rovers = tuple(
-        _make_agent_box(client, cfg, pose, cfg.bodies.rover_half_extents_m,
-                        _RGBA["rover"])
-        for pose in layout.rover_starts)
+        _make_rover(client, cfg, pose, marker_ids[i])
+        for i, pose in enumerate(layout.rover_starts))
 
     pads = tuple(_make_pad(client, cfg, pad) for pad in cfg.pads)
 

@@ -21,7 +21,7 @@ import time
 
 import pybullet as p
 
-from . import arena, camera, drone_model, frames, world
+from . import arena, camera, drone_model, frames, rover_model, world
 from .clock import SimClock
 from .config import SimConfig, load_config
 from .log import get_logger
@@ -44,6 +44,7 @@ class SimRegistry:
         self.layout = None           # ArenaLayout (set during boot)
         self.bodies = None           # WorldBodies (set during boot)
         self.drones = []             # [SimDrone] (set during boot)
+        self.rovers = []             # [SimRover] (set during boot)
         self.renderer = p.ER_TINY_RENDERER  # upgraded if the EGL plugin loads
         self._egl_plugin = -1
         self._calls = queue.Queue()  # (fn, result_box, done_event)
@@ -116,6 +117,11 @@ class SimRegistry:
         return self.run_on_sim_thread(
             lambda: [(d.spec.uwb_tag_id, *d.arena_position())
                      for d in self.drones])
+
+    def rover_arena_positions(self):
+        """[(north, east), ...] TRUE rover positions — for tests/viz only."""
+        return self.run_on_sim_thread(
+            lambda: [r.arena_position() for r in self.rovers])
 
     def body_count(self) -> int:
         """Total bodies in the PyBullet world (queried on the sim thread)."""
@@ -209,6 +215,14 @@ class SimRegistry:
             for i, (spec, pose, bid) in enumerate(
                 zip(cfg.drones.units, self.layout.drone_starts,
                     self.bodies.drones))
+        ]
+        self.rovers = [
+            rover_model.SimRover(
+                cfg=cfg, index=i, marker_id=cfg.rovers.marker_ids[i],
+                body_id=bid, client=self.client, clock=self.clock,
+                start_pose=pose, obstacles=self.layout.obstacles)
+            for i, (pose, bid) in enumerate(
+                zip(self.layout.rover_starts, self.bodies.rovers))
         ]
         self._log.info(
             "world booted: seed=%s rtf=%.2f bodies=%d "
@@ -305,6 +319,8 @@ class SimRegistry:
                 self.clock.advance(dt)
                 for d in self.drones:
                     d.step(dt)
+                for r in self.rovers:
+                    r.step(dt)
                 steps += 1
 
         self._fail_pending_calls()

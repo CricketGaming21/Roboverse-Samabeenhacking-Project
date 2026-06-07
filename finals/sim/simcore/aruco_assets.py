@@ -12,6 +12,7 @@ demand at world boot or via scripts/gen_assets.py).
 from pathlib import Path
 
 import cv2
+import numpy as np
 
 # 6x6 dictionary marker = 6 data + 2 black-border modules = 8 modules/side.
 # Quiet zone = 1 module per side => MARKER_PX/8 of white border.
@@ -77,6 +78,27 @@ vn 0 0 1
 f 1/1/1 2/2/1 3/3/1
 f 1/1/1 3/3/1 4/4/1
 """
+
+
+def ensure_billboard_png(path: str) -> str:
+    """Procedural RoboMaster-style billboard texture for the rover bodies.
+
+    VISUAL REALISM ONLY — detection always uses the ArUco marker on the
+    rover's top face, never this texture.
+    """
+    f = Path(path)
+    if not f.is_file():
+        f.parent.mkdir(parents=True, exist_ok=True)
+        img = np.full((256, 256, 3), (64, 60, 58), np.uint8)        # dark grey
+        cv2.rectangle(img, (24, 24), (232, 88), (92, 92, 96), -1)   # chassis
+        cv2.rectangle(img, (0, 104), (256, 152), (36, 36, 196), -1)  # red band
+        cv2.putText(img, "RoboMaster", (28, 142),
+                    cv2.FONT_HERSHEY_SIMPLEX, 0.85, (255, 255, 255), 2)
+        cv2.putText(img, "S1", (104, 224),
+                    cv2.FONT_HERSHEY_SIMPLEX, 1.4, (36, 36, 196), 3)
+        if not cv2.imwrite(str(f), img):
+            raise RuntimeError(f"failed to write billboard PNG: {f}")
+    return str(f)
 
 
 def ensure_quad_obj(out_dir: str = "assets") -> str:

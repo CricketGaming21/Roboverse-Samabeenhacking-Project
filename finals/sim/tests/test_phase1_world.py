@@ -108,6 +108,13 @@ def test_world_body_counts(cfg, registry):
     assert registry.body_count() == b.total == expected
 
 
+def _static_poses(snapshot):
+    """Rovers patrol on their own (Phase 6+), so their live poses depend on
+    when the snapshot lands; their START determinism is asserted via the
+    layout. Everything else must match bit-for-bit."""
+    return [s for s in snapshot if s[0] != "rover"]
+
+
 def test_same_seed_identical_world(cfg):
     reg1 = SimRegistry(cfg)
     try:
@@ -121,8 +128,8 @@ def test_same_seed_identical_world(cfg):
         layout2 = reg2.layout
     finally:
         reg2.shutdown()
-    assert layout1 == layout2
-    assert snap1 == snap2  # bodies are static => poses identical despite stepping
+    assert layout1 == layout2  # includes identical rover/drone starts
+    assert _static_poses(snap1) == _static_poses(snap2)
 
 
 def test_different_seed_different_world(cfg):
@@ -138,7 +145,7 @@ def test_different_seed_different_world(cfg):
         snap2 = reg2.snapshot_body_poses()
     finally:
         reg2.shutdown()
-    assert snap1 != snap2
+    assert _static_poses(snap1) != _static_poses(snap2)
 
 
 # --------------------------------------------------------------------------- #
