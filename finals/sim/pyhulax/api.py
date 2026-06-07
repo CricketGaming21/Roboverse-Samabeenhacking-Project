@@ -108,25 +108,36 @@ class DroneAPI:
     # Telemetry — §4.3 (each raises TelemetryUnavailable if no data yet)
     # ------------------------------------------------------------------ #
 
+    def _require_telemetry(self):
+        if self._drone is None:
+            raise TelemetryUnavailable("no telemetry before connect()")
+
     def get_state(self) -> DroneState:
-        raise NotImplementedError
+        self._require_telemetry()
+        return _bridge.read_state(self._reg, self._drone)
 
     def get_position(self) -> Vector3:
-        """cm, takeoff-origin frame, WITH drift (optical-flow/IMU estimate)."""
-        raise NotImplementedError
+        """cm, takeoff-origin frame, WITH drift (optical-flow/IMU estimate).
+
+        Drifts away from truth over time — correct it with UWB; UWB never
+        drifts. Frame is frozen at takeoff (x=right, y=forward, z=up).
+        """
+        self._require_telemetry()
+        return _bridge.read_position(self._reg, self._drone)
 
     def get_orientation(self) -> Orientation:
-        """Degrees (yaw, pitch, roll)."""
-        raise NotImplementedError
+        """Degrees (yaw, pitch, roll). Yaw = CCW from the takeoff heading."""
+        self._require_telemetry()
+        return _bridge.read_orientation(self._reg, self._drone)
 
     def get_altitude(self) -> float:
-        """cm, downward ToF."""
-        raise NotImplementedError
+        """cm, downward ToF (true height — never from UWB)."""
+        self._require_telemetry()
+        return _bridge.read_altitude(self._reg, self._drone)
 
     def get_battery(self) -> int:
         """0-100. Linear drain while flying (config drones.battery)."""
-        if self._drone is None:
-            raise TelemetryUnavailable("no telemetry before connect()")
+        self._require_telemetry()
         return _bridge.read_battery(self._reg, self._drone)
 
     # ------------------------------------------------------------------ #

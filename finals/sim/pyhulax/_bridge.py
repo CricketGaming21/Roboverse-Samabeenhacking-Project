@@ -51,3 +51,19 @@ def submit(reg, drone, blocking: bool, kind: str, **params) -> CommandResult:
 
 def read_battery(reg, drone) -> int:
     return reg.run_on_sim_thread(lambda: int(round(drone.battery_pct)))
+
+
+def read_position(reg, drone):
+    return reg.run_on_sim_thread(drone.telemetry_position)
+
+
+def read_orientation(reg, drone):
+    return reg.run_on_sim_thread(drone.telemetry_orientation)
+
+
+def read_altitude(reg, drone) -> float:
+    return reg.run_on_sim_thread(drone.telemetry_altitude)
+
+
+def read_state(reg, drone):
+    return reg.run_on_sim_thread(drone.telemetry_state)

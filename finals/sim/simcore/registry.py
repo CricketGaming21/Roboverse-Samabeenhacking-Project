@@ -102,6 +102,13 @@ class SimRegistry:
         d = self.drones[index]
         return self.run_on_sim_thread(lambda: (tuple(d.pos), float(d.yaw)))
 
+    def uwb_truth(self):
+        """[(uwb_tag_id, north, east), ...] TRUE arena positions, one atomic
+        sim-thread read — the UWB drop-in samples this each refresh."""
+        return self.run_on_sim_thread(
+            lambda: [(d.spec.uwb_tag_id, *d.arena_position())
+                     for d in self.drones])
+
     def body_count(self) -> int:
         """Total bodies in the PyBullet world (queried on the sim thread)."""
         return self.run_on_sim_thread(

@@ -22,7 +22,8 @@ import threading
 import numpy as np
 import pybullet as p
 
-from pyhulax.core import CommandResult, VelocityLevel
+from pyhulax.core import (CommandResult, DroneState, Obstacles, Orientation,
+                          Vector3, VelocityLevel)
 from pyhulax.exceptions import LowBattery, NotReady, PyhulaxError
 
 from . import frames
@@ -97,6 +98,14 @@ class SimDrone:
         self.battery_pct = float(cfg.drones.battery.start_pct)
         self.goal = None
 
+        # Drifting onboard estimate (optical-flow/IMU): estimate = true pose +
+        # drift_err. The error random-walks while flying (seeded, per drone);
+        # UWB never sees it — that asymmetry is the point (§5.3).
+        self._drift_enabled = bool(cfg.position_drift.enabled)
+        self._drift_std = float(cfg.position_drift.random_walk_std_mps)
+        self._drift_rng = np.random.default_rng([cfg.meta.seed, 1000 + index])
+        self.drift_err = np.zeros(3)      # world metres, estimate minus truth
+
     # ------------------------------------------------------------------ #
     # Goal installers — SIM THREAD ONLY (called via run_on_sim_thread).
     # Validation raises NotReady/LowBattery, which propagates to the caller.
@@ -112,6 +121,7 @@ class SimDrone:
         # Freeze the takeoff-origin frame HERE: ground point + current heading.
         self.takeoff_frame = frames.capture_takeoff_frame(
             self.pos[0], self.pos[1], self.pos[2] - self._half_z, self.yaw)
+        self.drift_err[:] = 0.0  # estimate re-anchors at takeoff
         self.flying = True
         target = self.pos.copy()
         target[2] = self.takeoff_frame.oz + height_cm / 100.0
@@ -172,6 +182,10 @@ class SimDrone:
         if self.flying and self.battery_pct > 0.0:
             drain = self.cfg.drones.battery.drain_pct_per_min * dt / 60.0
             self.battery_pct = max(0.0, self.battery_pct - drain)
+        if self.flying and self._drift_enabled and self._drift_std > 0.0:
+            # Gaussian random walk: error std grows as std_mps * sqrt(t).
+            self.drift_err += self._drift_rng.normal(
+                0.0, self._drift_std * math.sqrt(dt), 3)
 
         g = self.goal
         if g is None:
@@ -215,6 +229,53 @@ class SimDrone:
             if g.kind == "land":
                 self.flying = False
             g.complete(True, f"{g.kind} complete")
+
+    # ------------------------------------------------------------------ #
+    # Telemetry reads — SIM THREAD ONLY (called via run_on_sim_thread)
+    # ------------------------------------------------------------------ #
+
+    def _frame_or_provisional(self) -> frames.TakeoffFrame:
+        """Before the first takeoff there is no frozen frame yet; report in a
+        provisional frame anchored at the current pose (reads ~(0,0,hz))."""
+        if self.takeoff_frame is not None:
+            return self.takeoff_frame
+        return frames.capture_takeoff_frame(
+            self.pos[0], self.pos[1], self.pos[2] - self._half_z, self.yaw)
+
+    def telemetry_position(self) -> Vector3:
+        """Drifting onboard estimate, TAKEOFF-ORIGIN frame, cm (§4.3)."""
+        fr = self._frame_or_provisional()
+        est = self.pos + self.drift_err
+        x, y, z = frames.world_to_takeoff_cm(fr, est[0], est[1], est[2])
+        return Vector3(x, y, z)
+
+    def telemetry_orientation(self) -> Orientation:
+        """Degrees. Yaw = CCW from the takeoff heading, normalised [0, 360).
+        Pitch/roll are 0 in the kinematic sim. (Reference to verify on the
+        real drone later — relative-to-takeoff matches IMU re-zeroing.)"""
+        fr = self._frame_or_provisional()
+        yaw_deg = math.degrees(self.yaw - fr.psi0) % 360.0
+        return Orientation(yaw=yaw_deg, pitch=0.0, roll=0.0)
+
+    def telemetry_altitude(self) -> float:
+        """Downward ToF, cm, from TRUE height above the (flat) floor.
+        Phase 4 replaces this with a real downward ray-cast."""
+        return (self.pos[2] - self._ground_z) * 100.0
+
+    def telemetry_state(self) -> DroneState:
+        return DroneState(
+            connected=self.connected,
+            position=self.telemetry_position(),
+            orientation=self.telemetry_orientation(),
+            altitude=self.telemetry_altitude(),
+            battery=int(round(self.battery_pct)),
+            obstacles=Obstacles(),   # real barrier sensors land in Phase 4
+            flying=self.flying,
+        )
+
+    def arena_position(self):
+        """TRUE (north, east) metres — the UWB drop-in's ground truth."""
+        return frames.world_to_arena(self.cfg, self.pos[0], self.pos[1])
 
     # ------------------------------------------------------------------ #
     # Internals

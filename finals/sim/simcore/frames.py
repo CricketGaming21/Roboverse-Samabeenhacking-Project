@@ -101,6 +101,20 @@ def world_to_takeoff_cm(fr: TakeoffFrame, x_w: float, y_w: float, z_w: float):
             (z_w - fr.oz) * 100.0)
 
 
+def arena_to_takeoff_cm(cfg, fr: TakeoffFrame, north: float, east: float,
+                        z_m: float = 0.0):
+    """Arena (north, east[, z]) metres -> a drone's takeoff frame (cm)."""
+    x_w, y_w, z_w = arena_to_world(cfg, north, east, z_m)
+    return world_to_takeoff_cm(fr, x_w, y_w, z_w)
+
+
+def takeoff_cm_to_arena(cfg, fr: TakeoffFrame, x_cm: float, y_cm: float,
+                        z_cm: float = 0.0):
+    """A drone's takeoff-frame point (cm) -> arena (north, east) metres."""
+    x_w, y_w, _ = takeoff_cm_to_world(fr, x_cm, y_cm, z_cm)
+    return world_to_arena(cfg, x_w, y_w)
+
+
 # --------------------------------------------------------------------------- #
 # Body-relative directions (§4.2 move()) — relative to the CURRENT heading
 # --------------------------------------------------------------------------- #
