@@ -182,10 +182,10 @@ class SimRegistry:
                 cameraUpVector=[0.0, 1.0, 0.0])
             proj = p.computeProjectionMatrixFOV(
                 fov=fov_deg, aspect=aspect, nearVal=0.1, farVal=alt + 10.0)
-            img = p.getCameraImage(width, height, viewMatrix=view,
-                                   projectionMatrix=proj,
-                                   renderer=self.renderer,
-                                   physicsClientId=self.client)
+            img = p.getCameraImage(
+                width, height, viewMatrix=view, projectionMatrix=proj,
+                renderer=camera.resolve_renderer(self.client, self.renderer),
+                physicsClientId=self.client)  # GUI -> software (no hang)
             rgba = np.asarray(img[2], dtype=np.uint8).reshape(height, width, 4)
             return rgba[:, :, :3].copy()
         rgb = self.run_on_sim_thread(_render, timeout=60)
@@ -225,11 +225,11 @@ class SimRegistry:
                 cameraYaw=-90.0, cameraPitch=-55.0,
                 cameraTargetPosition=[cx, cy, 0.5],
                 physicsClientId=self.client)
-            # Camera frames (referee/streams) use the CPU TinyRenderer in
-            # GUI mode: hardware getCameraImage from the sim thread races
-            # the GUI's own render thread and segfaults (observed on
-            # WSLg/D3D12). GUI is a human-speed viewing mode — run it near
-            # real time; the headless DIRECT+EGL path is unchanged.
+            # Default field stays Tiny for GUI; the AUTHORITATIVE guard is
+            # camera.resolve_renderer (keyed on the live connection mode), so
+            # no camera-render path can issue a hardware getCameraImage while
+            # GUI is connected (it races the GUI render thread and hangs/
+            # segfaults on WSLg/D3D12). GUI is a human-speed viewing mode.
             self.renderer = p.ER_TINY_RENDERER
         else:
             self.client = p.connect(p.DIRECT)
