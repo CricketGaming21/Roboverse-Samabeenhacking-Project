@@ -221,12 +221,14 @@ def _direct(cfg, reg, done_evt, errors):
 
 
 def run_scenario_demo(cfg, verbose=False, gui=False, live=False, debug=False,
-                      dump_path=None, topdown_png=None, dashboard=False) -> dict:
+                      dump_path=None, topdown_png=None, dashboard=False,
+                      record_path=None) -> dict:
     """Run the whole canned scenario; returns both scores + run telemetry."""
     reg = get_registry(cfg, gui=gui)
     view = TopDownView(reg)
     stop_debug = None
     dash = None
+    recorder = None
     cams = []
     rover_samples = []
     drone_samples = []
@@ -244,6 +246,10 @@ def run_scenario_demo(cfg, verbose=False, gui=False, live=False, debug=False,
             from scripts.dashboard import CommandDashboard
             dash = CommandDashboard(reg)
             dash.start()
+        if record_path:
+            from simcore.recorder import ArenaRecorder
+            recorder = ArenaRecorder(reg, record_path)
+            recorder.start()
         view.start_sampling()
         threading.Thread(target=_track_world,
                          args=(reg, rover_samples, drone_samples, done_evt),
@@ -259,8 +265,11 @@ def run_scenario_demo(cfg, verbose=False, gui=False, live=False, debug=False,
         if errors:
             raise errors[0]
         time.sleep(0.3)  # let the referees flush
+        record_frames = recorder.stop() if recorder else 0
+        recorder = None
         banked = reg.referee.banked() if reg.referee else []
         result = {
+            "record_frames": record_frames,
             "landing_score": reg.landing_scorer.score(),
             "landings": [(r.drone_index, r.pad_id, r.error_m, r.sim_time)
                          for r in reg.landing_scorer.results()],
@@ -285,6 +294,8 @@ def run_scenario_demo(cfg, verbose=False, gui=False, live=False, debug=False,
                   f"final phase: {result['final_phase']}")
         return result
     finally:
+        if recorder:
+            recorder.stop()
         if dash:
             dash.stop()
         if cams:
@@ -314,6 +325,9 @@ def main(argv=None) -> None:
                     help="save the final top-down view")
     ap.add_argument("--dashboard", action="store_true",
                     help="live read-only per-drone command/telemetry console")
+    ap.add_argument("--record", metavar="PATH.mp4", default=None,
+                    help="record an offscreen 3D MP4 of the real run "
+                         "(headless EGL; no GUI window)")
     args = ap.parse_args(argv)
 
     cfg = load_config()
@@ -323,7 +337,8 @@ def main(argv=None) -> None:
     result = run_scenario_demo(cfg, verbose=True, gui=args.gui,
                                live=args.live, debug=args.debug,
                                dump_path=args.dump, topdown_png=args.topdown,
-                               dashboard=args.dashboard)
+                               dashboard=args.dashboard,
+                               record_path=args.record)
     ok = result["landing_score"] >= 1 and result["snapshot_score"] >= 1
     print("SCENARIO DEMO COMPLETE" if ok else
           f"SCENARIO DEMO INCOMPLETE (landings={result['landing_score']}, "

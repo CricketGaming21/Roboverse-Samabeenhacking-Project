@@ -343,6 +343,22 @@ class MonitorConfig:
 
 
 @dataclass
+class RecordConfig:
+    """Offscreen MP4 recording of the real headless run (--record PATH.mp4).
+
+    A passive observer: an angled-overhead third-person view of the whole
+    arena, captured via the SAME guarded offscreen EGL path the drone
+    cameras use — never p.GUI. Off unless --record is passed."""
+    fps: int = 30                     # video frames per SIM second
+    width: int = 1280
+    height: int = 720
+    camera_height_m: float = 9.0      # eye altitude of the third-person cam
+    camera_angle_deg: float = 45.0    # elevation above horizontal
+    fov_deg: float = 60.0             # framing the whole arena
+    show_camera_insets: bool = True   # per-drone feeds (Phase 23)
+
+
+@dataclass
 class LoggingConfig:
     level: str = "INFO"
     file: str = "logs/sim.log"
@@ -377,6 +393,7 @@ class SimConfig:
     scoring: ScoringConfig = field(default_factory=ScoringConfig)
     viz: VizConfig = field(default_factory=VizConfig)
     monitor: MonitorConfig = field(default_factory=MonitorConfig)
+    record: RecordConfig = field(default_factory=RecordConfig)
     logging: LoggingConfig = field(default_factory=LoggingConfig)
 
 

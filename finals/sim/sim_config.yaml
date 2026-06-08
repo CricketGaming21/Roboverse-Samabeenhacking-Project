@@ -231,6 +231,19 @@ monitor:
   max_cmd_rate_hz: 5.0     # warn if a drone is re-commanded faster than this
   warn_on_preempt: true    # warn if a new motion command preempts an unfinished one
 
+# --- Offscreen run recording (--record PATH.mp4) -----------------------------
+# A passive observer of the REAL headless run: an angled-overhead 3D view of
+# the whole arena, captured via the same offscreen EGL path the drone cameras
+# use — NEVER p.GUI, so it can't freeze on WSLg. Off unless --record is given.
+record:
+  fps: 30                  # video frames per SIM second (sampled, not per tick)
+  width: 1280
+  height: 720
+  camera_height_m: 9.0     # eye altitude of the third-person camera
+  camera_angle_deg: 45.0   # elevation above horizontal
+  fov_deg: 60.0            # vertical FOV, framing the whole arena
+  show_camera_insets: true # composite per-drone feeds into the frame (Phase 23)
+
 # --- Logging -----------------------------------------------------------------
 logging:
   level: INFO

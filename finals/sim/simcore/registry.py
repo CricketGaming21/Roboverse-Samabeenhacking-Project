@@ -120,6 +120,46 @@ class SimRegistry:
                                       self.renderer),
             timeout=30)
 
+    def render_arena(self, width: int = None, height: int = None):
+        """One (H, W, 3) uint8 RGB frame of a fixed angled-overhead
+        third-person view framing the WHOLE arena — offscreen, on the sim
+        thread, through the guarded renderer (EGL headless; never p.GUI).
+        Passive observer for the recorder; renders the live world, no
+        re-sim. Returns None if the sim has shut down."""
+        import math
+
+        import numpy as np
+        rc = self.config.record
+        w = int(width if width is not None else rc.width)
+        h = int(height if height is not None else rc.height)
+
+        def _render():
+            L, W = self.config.arena.length_m, self.config.arena.width_m
+            tx, ty, _ = frames.arena_to_world(self.config, L / 2, W / 2, 0.0)
+            # Eye stands off behind the south edge, elevated, looking at the
+            # arena centre at the configured elevation angle.
+            ang = math.radians(rc.camera_angle_deg)
+            standoff = rc.camera_height_m / max(math.tan(ang), 0.1)
+            ex, ey, _ = frames.arena_to_world(
+                self.config, L / 2 - standoff, W / 2, 0.0)
+            view = p.computeViewMatrix(
+                cameraEyePosition=[ex, ey, rc.camera_height_m],
+                cameraTargetPosition=[tx, ty, 0.3],
+                cameraUpVector=[0.0, 0.0, 1.0])
+            proj = p.computeProjectionMatrixFOV(
+                fov=rc.fov_deg, aspect=w / h, nearVal=0.1,
+                farVal=rc.camera_height_m + math.hypot(L, W) + 10.0)
+            img = p.getCameraImage(
+                w, h, viewMatrix=view, projectionMatrix=proj,
+                renderer=camera.resolve_renderer(self.client, self.renderer),
+                physicsClientId=self.client)  # GUI -> software (never here)
+            rgba = np.asarray(img[2], dtype=np.uint8).reshape(h, w, 4)
+            return rgba[:, :, :3].copy()
+        try:
+            return self.run_on_sim_thread(_render, timeout=30)
+        except (RuntimeError, TimeoutError):
+            return None
+
     def uwb_truth(self):
         """[(uwb_tag_id, north, east), ...] TRUE arena positions, one atomic
         sim-thread read — the UWB drop-in samples this each refresh."""

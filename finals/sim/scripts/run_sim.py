@@ -74,6 +74,9 @@ def main(argv=None) -> None:
                     help="append per-tick JSON snapshots (JSON Lines) to PATH")
     ap.add_argument("--dashboard", action="store_true",
                     help="live read-only per-drone command/telemetry console")
+    ap.add_argument("--record", metavar="PATH.mp4", default=None,
+                    help="record an offscreen 3D MP4 of the run "
+                         "(headless EGL; no GUI window)")
     args = ap.parse_args(argv)
 
     cfg = load_config(args.config)
@@ -82,6 +85,7 @@ def main(argv=None) -> None:
     view = TopDownView(reg)
     stop_debug = None
     dash = None
+    recorder = None
     cams = []
     try:
         b = reg.bodies
@@ -101,6 +105,10 @@ def main(argv=None) -> None:
             from scripts.dashboard import CommandDashboard
             dash = CommandDashboard(reg)
             dash.start()
+        if args.record:
+            from simcore.recorder import ArenaRecorder
+            recorder = ArenaRecorder(reg, args.record)
+            recorder.start()
         if cfg.viz.show_camera_windows:
             cams = open_camera_windows(cfg, log)
         view.start_sampling()
@@ -123,6 +131,8 @@ def main(argv=None) -> None:
         print(format_combined_scoreboard(reg))
         print(reg.monitor.format_report())
     finally:
+        if recorder:
+            recorder.stop()
         if dash:
             dash.stop()
         close_camera_windows(cams)
