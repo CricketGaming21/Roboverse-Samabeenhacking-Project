@@ -57,6 +57,7 @@ def test_capture_frame_has_overlay_and_variance(tmp_path):
     cfg = _cfg()
     cfg.scoring.enabled = False
     cfg.record.width, cfg.record.height = 480, 320
+    cfg.record.show_camera_insets = False  # bare arena frame under test here
     reg = get_registry(cfg)
     try:
         rec = ArenaRecorder(reg, str(tmp_path / "x.mp4"))
@@ -78,6 +79,8 @@ def test_record_run_writes_video_with_expected_frames(tmp_path):
     cfg = _cfg()
     cfg.record.fps = 20
     cfg.record.width, cfg.record.height = 480, 320
+    cfg.record.show_camera_insets = False  # arena-frame-rate path (Phase 22);
+    # insets quadruple the per-frame render cost (Phase 23 has its own checks)
     out = tmp_path / "run.mp4"
     result = run_scenario_demo(cfg, record_path=str(out))
 

@@ -20,6 +20,7 @@ from pathlib import Path
 import cv2
 import numpy as np
 
+from . import camfeed
 from .log import get_logger
 
 _PHASE_LABEL = {"deploy": "DEPLOY", "ambush": "AMBUSH", "done": "DONE"}
@@ -34,7 +35,14 @@ class ArenaRecorder:
         self._rc = self._cfg.record
         self._path = Path(path)
         self._log = get_logger("recorder", self._cfg)
-        self._w, self._h = int(self._rc.width), int(self._rc.height)
+        self._arena_w = int(self._rc.width)
+        self._arena_h = int(self._rc.height)
+        # Per-drone camera insets go in a row BELOW the arena view, so the
+        # output canvas is taller than the arena render (Phase 23).
+        self._insets = bool(self._rc.show_camera_insets)
+        self._band_h = self._arena_h // 4 if self._insets else 0
+        self._w = self._arena_w
+        self._h = self._arena_h + self._band_h
         self._writer = None          # cv2.VideoWriter, or None for PNG mode
         self._png_dir = None         # set in PNG-fallback mode
         self.frames_written = 0
@@ -47,13 +55,63 @@ class ArenaRecorder:
     # ------------------------------------------------------------------ #
 
     def capture_frame(self):
-        """Render + overlay one frame now; returns BGR ndarray or None."""
-        rgb = self._reg.render_arena(self._w, self._h)
+        """Render + overlay one composited frame now; returns BGR or None.
+
+        Top: the third-person arena view with the info overlay. Bottom (when
+        record.show_camera_insets): a row of the three per-drone camera feeds
+        — the SAME offscreen frames the referee judges — each with detected
+        ArUco markers outlined + id labelled (camfeed.annotate_markers)."""
+        rgb = self._reg.render_arena(self._arena_w, self._arena_h)
         if rgb is None:
             return None
-        bgr = cv2.cvtColor(rgb, cv2.COLOR_RGB2BGR)
-        self._overlay(bgr)
-        return bgr
+        arena = cv2.cvtColor(rgb, cv2.COLOR_RGB2BGR)
+        self._overlay(arena)
+        if not self._insets:
+            return arena
+        canvas = np.zeros((self._h, self._w, 3), dtype=np.uint8)
+        canvas[:self._arena_h] = arena
+        canvas[self._arena_h:] = self._inset_row()
+        return canvas
+
+    def _inset_row(self):
+        """The bottom band: three labelled per-drone camera tiles."""
+        drones = self._reg.drones
+        tile_w = self._w // 3
+        band = np.full((self._band_h, self._w, 3), 30, dtype=np.uint8)
+        for i in range(3):
+            x0 = i * tile_w
+            x1 = self._w if i == 2 else x0 + tile_w
+            tile = self._drone_tile(drones[i] if i < len(drones) else None,
+                                    x1 - x0, self._band_h)
+            band[:, x0:x1] = tile
+            cv2.rectangle(band, (x0, 0), (x1 - 1, self._band_h - 1),
+                          (90, 90, 90), 1)
+        return band
+
+    def _drone_tile(self, drone, w, h):
+        """One inset: the drone's annotated live frame, or a placeholder when
+        it isn't flying (DEPLOY pre-takeoff). Never crashes."""
+        tile = np.full((h, w, 3), 40, dtype=np.uint8)
+        flying = drone is not None and getattr(drone, "flying", False)
+        if flying:
+            rgb = self._reg.render_camera(drone)
+            if rgb is not None:
+                annotated, _found = camfeed.annotate_markers(
+                    self._cfg, cv2.cvtColor(rgb, cv2.COLOR_RGB2BGR))
+                tile = cv2.resize(annotated, (w, h))
+                label = f"drone {drone.index}"
+            else:
+                label = (f"drone {drone.index}" if drone is not None
+                         else "-") + " (no frame)"
+        else:
+            cv2.putText(tile, "idle (pre-takeoff)", (10, h // 2),
+                        cv2.FONT_HERSHEY_SIMPLEX, 0.5, (160, 160, 160), 1)
+            idx = getattr(drone, "index", "-") if drone is not None else "-"
+            label = f"drone {idx}"
+        cv2.rectangle(tile, (0, 0), (w, 20), (0, 0, 0), -1)
+        cv2.putText(tile, label, (6, 15), cv2.FONT_HERSHEY_SIMPLEX, 0.5,
+                    (0, 255, 0), 1)
+        return tile
 
     def _overlay(self, bgr) -> None:
         reg = self._reg
