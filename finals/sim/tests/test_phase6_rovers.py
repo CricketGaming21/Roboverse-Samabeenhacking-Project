@@ -25,6 +25,7 @@ def _base_cfg():
     c = load_config("sim_config.yaml")
     c.meta.real_time_factor = 10.0
     c.scoring.enabled = False  # referee not under test here
+    c.motion.realistic = False  # crisp snap motion: exact geometry under test
     c.scenario.phases = "ambush"  # rovers active immediately (scenario is
     c.rovers.motion = "patrol"    # under test in test_phase10_scenario.py;
     return c                      # this suite covers the retained patrol)

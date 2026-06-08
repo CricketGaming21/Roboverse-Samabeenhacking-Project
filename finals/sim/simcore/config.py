@@ -127,9 +127,19 @@ class VelocityLevelsConfig:
 
 @dataclass
 class MotionConfig:
-    """Airframe motion realism (Phase 18 consumes these; the value is the
-    confirmed spec). max_tilt_deg is BODY tilt-to-translate — not camera."""
-    max_tilt_deg: float = 20.0
+    """Airframe motion realism. This models BEHAVIOUR (ramps, momentum,
+    settling, latency, bounded drift) — it is NOT a firmware-accurate
+    dynamics replica; the Hula has no SITL to replicate. realistic=False
+    restores crisp snap-to-target motion for deterministic geometry tests.
+    max_tilt_deg is BODY tilt-to-translate — not the camera."""
+    realistic: bool = True
+    max_tilt_deg: float = 20.0        # confirmed spec
+    accel_mps2: float = 1.2           # accel/decel ramp to/from cruise
+    latency_s: float = 0.08           # command-to-motion latency
+    overshoot_frac: float = 0.15      # under-braking => mild overshoot+settle
+    arrive_tol_m: float = 0.04        # settled-position tolerance
+    arrive_speed_mps: float = 0.08    # ...and residual-speed tolerance
+    wind_mps: float = 0.0             # optional gentle wind (0 = off)
 
 
 @dataclass
@@ -172,8 +182,13 @@ class UWBConfig:
 
 @dataclass
 class PositionDriftConfig:
+    """get_position() estimate error: mean-reverting (OU), CALIBRATED to the
+    confirmed optical-flow accuracy — it wanders to ~±bound and stays
+    BOUNDED there, never unbounded. UWB never drifts (the asymmetry)."""
     enabled: bool = True
-    random_walk_std_mps: float = 0.02
+    horizontal_bound_m: float = 0.20  # confirmed ±20 cm horizontal (~2 sigma)
+    vertical_bound_m: float = 0.10    # confirmed ±10 cm vertical
+    tau_s: float = 20.0               # mean-reversion time constant
 
 
 @dataclass

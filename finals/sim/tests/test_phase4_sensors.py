@@ -27,6 +27,7 @@ def cfg():
     c = load_config("sim_config.yaml")
     c.meta.real_time_factor = 10.0
     c.scoring.enabled = False  # referee not under test here
+    c.motion.realistic = False  # crisp snap motion: exact geometry under test
     c.camera.use_egl = False
     c.arena.layout = "procedural"  # authored map off: controlled arena
     c.arena.obstacles.count = 0   # we spawn our own boxes

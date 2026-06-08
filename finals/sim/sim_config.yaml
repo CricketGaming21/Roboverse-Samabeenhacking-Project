@@ -72,9 +72,19 @@ velocity_levels:           # m/s per pyhulax speed level, capped at 1.0
   climb_mps: 1.2           # confirmed asymmetric vertical: climb 1.2 m/s
   descent_mps: 1.0         #                                descend 1.0 m/s
 
-# --- Airframe motion (Phase 18 realism consumes these) ------------------------
+# --- Airframe motion realism ---------------------------------------------------
+# Models BEHAVIOUR (ramps, momentum, settling, latency, bounded drift) — NOT a
+# firmware-accurate dynamics replica (the Hula has no SITL). realistic: false
+# restores crisp snap-to-target motion for deterministic geometry tests.
 motion:
+  realistic: true
   max_tilt_deg: 20.0       # confirmed max BODY tilt (tilt-to-translate)
+  accel_mps2: 1.2          # accel/decel ramp to/from cruise speed
+  latency_s: 0.08          # command-to-motion latency
+  overshoot_frac: 0.15     # under-braking => mild overshoot then settle
+  arrive_tol_m: 0.04       # settled-position tolerance
+  arrive_speed_mps: 0.08   # ...and residual-speed tolerance
+  wind_mps: 0.0            # optional gentle wind disturbance (0 = off)
 
 # --- Drones (3) --------------------------------------------------------------
 # start positions in arena frame (north, east); heading_deg 0 = facing +north.
@@ -101,9 +111,13 @@ uwb:
   y_origin: 0.0
 
 # --- Onboard position estimate drift (get_position only; UWB never drifts) ----
+# Mean-reverting (OU), calibrated to the confirmed optical-flow accuracy:
+# wanders to ~±bound and stays BOUNDED there — never unbounded.
 position_drift:
   enabled: true
-  random_walk_std_mps: 0.02  # cm/s-scale drift of the optical-flow/IMU estimate
+  horizontal_bound_m: 0.20 # confirmed ±20 cm horizontal (~2 sigma)
+  vertical_bound_m: 0.10   # confirmed ±10 cm vertical
+  tau_s: 20.0              # mean-reversion time constant
 
 # --- Barrier sensors (IR/ToF, blocked/clear per direction) -------------------
 barrier_sensors:

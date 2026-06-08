@@ -86,7 +86,10 @@ def test_demo_observers_hold_and_lockon_is_gradual():
     window = [(t, d) for t, d in on_station if d[3] < 89.0]
     assert window, "the scripted lock-on never ran"
     t_w0, t_w1 = window[0][0], window[-1][0]
-    assert 1.0 <= t_w1 - t_w0 <= 5.0               # gradual, ~1-2 s, not a snap
+    # Gradual, never a snap. (Crisp-motion keyframes take ~2 s; with the
+    # phase-18 realistic model each micro-move adds latency+ramp+settle,
+    # stretching the eased window to ~5 s — still smooth, asserted below.)
+    assert 1.0 <= t_w1 - t_w0 <= 6.5
     pitches = [d[3] for _t, d in window]
     assert len(set(pitches)) >= 4                  # eased through keyframes
     assert min(pitches) <= 70.0                    # tilted well off nadir

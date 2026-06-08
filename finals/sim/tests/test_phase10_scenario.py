@@ -23,6 +23,7 @@ def _cfg(**scenario_overrides):
     c.camera.use_egl = False
     c.scoring.enabled = False
     c.rovers.motion = "patrol"  # scenario mechanics under test here;
+    c.motion.realistic = False  # crisp snap motion: exact geometry under test
     # convoy routing has its own suite in test_phase11_convoy.py
     for key, value in scenario_overrides.items():
         if key in ("mode", "delay_s"):

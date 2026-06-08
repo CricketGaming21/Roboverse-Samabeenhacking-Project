@@ -24,6 +24,7 @@ def _cfg(**overrides):
     c.meta.real_time_factor = 10.0
     c.camera.use_egl = False
     c.scoring.enabled = False  # part-1 scorer must work without the camera referee
+    c.motion.realistic = False  # crisp snap motion: exact geometry under test
     for key, value in overrides.items():
         setattr(c.scoring.landing, key, value)
     return c
@@ -170,6 +171,7 @@ def test_snapshots_gate_by_phase_and_never_score_pads():
     cfg.arena.obstacles.count = 0
     cfg.rovers.motion = "patrol"
     cfg.rovers.patrol.speed_mps = 0.0     # parked targets
+    cfg.motion.realistic = False          # crisp: exact hover geometry
     cfg.scenario.ambush_trigger.mode = "manual_key"
     cfg.scenario.ambush_trigger.delay_s = 0.2
     reg = get_registry(cfg)

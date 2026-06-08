@@ -27,6 +27,7 @@ def cfg():
     c.meta.real_time_factor = 10.0
     c.camera.use_egl = False
     c.scoring.enabled = False
+    c.motion.realistic = False  # crisp snap motion: exact geometry under test
     c.arena.layout = "procedural"  # controlled arena: we spawn the obstacle
     c.arena.obstacles.count = 0
     c.rovers.count = 0

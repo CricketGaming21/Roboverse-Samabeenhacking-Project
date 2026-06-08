@@ -80,6 +80,7 @@ def test_rendered_marker_px_matches_fov71(cfg):
     camera, not just the YAML."""
     cfg.meta.real_time_factor = 10.0
     cfg.scoring.enabled = False
+    cfg.motion.realistic = False  # crisp: measuring configured speeds exactly
     cfg.arena.layout = "procedural"
     cfg.arena.obstacles.count = 0
     cfg.rovers.motion = "patrol"
@@ -123,6 +124,7 @@ def test_takeoff_climbs_faster_than_landing_descends(cfg):
     cfg.meta.real_time_factor = 10.0
     cfg.camera.use_egl = False
     cfg.scoring.enabled = False
+    cfg.motion.realistic = False  # crisp: measuring configured speeds exactly
     reg = get_registry(cfg)
     try:
         d = DroneAPI()

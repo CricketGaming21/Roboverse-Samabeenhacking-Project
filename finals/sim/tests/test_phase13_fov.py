@@ -25,6 +25,7 @@ def cfg():
     c = load_config("sim_config.yaml")
     c.meta.real_time_factor = 10.0
     c.scoring.enabled = False
+    c.motion.realistic = False  # crisp snap motion: exact geometry under test
     return c
 
 

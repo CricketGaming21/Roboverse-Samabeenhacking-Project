@@ -71,10 +71,12 @@ class Goal:
     """One in-flight command target. done/result are consumed by the waiter."""
 
     __slots__ = ("kind", "target_pos", "target_yaw", "speed_mps",
-                 "yaw_rate_rps", "end_time", "deadline", "done", "result")
+                 "yaw_rate_rps", "end_time", "deadline", "exec_after",
+                 "done", "result")
 
     def __init__(self, kind, target_pos=None, target_yaw=None, speed_mps=0.0,
-                 yaw_rate_rps=0.0, end_time=None, deadline=float("inf")):
+                 yaw_rate_rps=0.0, end_time=None, deadline=float("inf"),
+                 exec_after=0.0):
         self.kind = kind
         self.target_pos = target_pos      # np.ndarray(3) world m, or None
         self.target_yaw = target_yaw      # world rad (unwrapped), or None
@@ -82,6 +84,7 @@ class Goal:
         self.yaw_rate_rps = yaw_rate_rps
         self.end_time = end_time          # sim time the goal must last until
         self.deadline = deadline          # sim time after which it fails
+        self.exec_after = exec_after      # command latency (realistic mode)
         self.done = threading.Event()
         self.result = None
 
@@ -118,12 +121,37 @@ class SimDrone:
         self.goal = None
 
         # Drifting onboard estimate (optical-flow/IMU): estimate = true pose +
-        # drift_err. The error random-walks while flying (seeded, per drone);
-        # UWB never sees it — that asymmetry is the point (§5.3).
-        self._drift_enabled = bool(cfg.position_drift.enabled)
-        self._drift_std = float(cfg.position_drift.random_walk_std_mps)
+        # drift_err. Mean-reverting (OU) while flying, CALIBRATED so the
+        # error wanders to ~±horizontal_bound_m and stays BOUNDED there —
+        # the confirmed optical-flow accuracy. UWB never sees it (§5.3).
+        pd = cfg.position_drift
+        self._drift_enabled = bool(pd.enabled)
+        self._drift_tau = max(float(pd.tau_s), 1e-3)
+        # OU stationary std = sigma*sqrt(tau/2); bound ~= 2*std.
+        self._drift_sig_h = (float(pd.horizontal_bound_m) / 2.0) \
+            * math.sqrt(2.0 / self._drift_tau)
+        self._drift_sig_v = (float(pd.vertical_bound_m) / 2.0) \
+            * math.sqrt(2.0 / self._drift_tau)
         self._drift_rng = np.random.default_rng([cfg.meta.seed, 1000 + index])
         self.drift_err = np.zeros(3)      # world metres, estimate minus truth
+
+        # Realistic motion model (config motion.*): BEHAVIOUR ONLY — ramps,
+        # tilt-to-translate, momentum/settling, latency. NOT a firmware-
+        # accurate dynamics replica (the Hula has no SITL to replicate).
+        # motion.realistic=False keeps the crisp snap-to-target stepper.
+        m = cfg.motion
+        self._realistic = bool(m.realistic)
+        self._accel = float(m.accel_mps2)
+        self._max_tilt = float(m.max_tilt_deg)
+        self._latency = float(m.latency_s)
+        self._overshoot = float(m.overshoot_frac)
+        self._arrive_tol = float(m.arrive_tol_m)
+        self._arrive_speed = float(m.arrive_speed_mps)
+        self._wind_mps = float(m.wind_mps)
+        self._wind_rng = np.random.default_rng([cfg.meta.seed, 4000 + index])
+        self._wind_vec = np.zeros(2)
+        self.vel = np.zeros(3)            # world m/s (realistic mode)
+        self.tilt_deg = 0.0               # body pitch; negative = nose down
 
         # Reflexes (§4.4) — both route through the SAME committing executor.
         self.barrier_mode = False         # firmware auto-avoid (stop short)
@@ -171,7 +199,12 @@ class SimDrone:
         self._require_flying("hover")
         self._require_battery("hover")
         end = self._clock.now() + max(0.0, float(duration_seconds))
-        return self._install("hover", target_pos=self.pos.copy(), end_time=end)
+        # Station-keeping speed: the realistic controller needs a nonzero
+        # cap to hold position against momentum/wind (crisp mode ignores it).
+        return self._install("hover", target_pos=self.pos.copy(),
+                             end_time=end,
+                             speed_mps=speed_to_mps(self.cfg,
+                                                    VelocityLevel.MEDIUM))
 
     def goal_move(self, direction, distance_cm: float, speed) -> Goal:
         """BODY-relative: direction is taken from the CURRENT heading."""
@@ -211,10 +244,15 @@ class SimDrone:
         if self.flying and self.battery_pct > 0.0:
             drain = self.cfg.drones.battery.drain_pct_per_min * dt / 60.0
             self.battery_pct = max(0.0, self.battery_pct - drain)
-        if self.flying and self._drift_enabled and self._drift_std > 0.0:
-            # Gaussian random walk: error std grows as std_mps * sqrt(t).
-            self.drift_err += self._drift_rng.normal(
-                0.0, self._drift_std * math.sqrt(dt), 3)
+        if self.flying and self._drift_enabled:
+            # OU drift: mean-reverting toward zero, bounded near the
+            # configured optical-flow accuracy (never unbounded).
+            e = self.drift_err
+            sq = math.sqrt(dt)
+            e[0:2] += (-e[0:2] * (dt / self._drift_tau)
+                       + self._drift_rng.normal(0.0, self._drift_sig_h * sq, 2))
+            e[2] += (-e[2] * (dt / self._drift_tau)
+                     + self._drift_rng.normal(0.0, self._drift_sig_v * sq))
         if self.flying:
             self._run_reflexes()  # may preempt or stop the active goal
 
@@ -226,7 +264,48 @@ class SimDrone:
             self.goal = None
             g.complete(False, f"{g.kind} timed out (sim-time deadline)")
             return
+        if self._realistic:
+            self._step_realistic(g, dt, now)
+        else:
+            self._step_crisp(g, dt, now)
 
+    def _yaw_step(self, g, dt: float) -> bool:
+        """Shared rate-limited yaw tracking. Returns True if the yaw moved."""
+        if g.target_yaw is None or self.yaw == g.target_yaw:
+            return False
+        dyaw = g.target_yaw - self.yaw
+        step_yaw = g.yaw_rate_rps * dt
+        if abs(dyaw) <= step_yaw:
+            self.yaw = g.target_yaw
+        else:
+            self.yaw += math.copysign(step_yaw, dyaw)
+        return True
+
+    def _mirror_pose(self) -> None:
+        p.resetBasePositionAndOrientation(
+            self.body_id, self.pos.tolist(),
+            p.getQuaternionFromEuler(
+                [0.0, -math.radians(self.tilt_deg), self.yaw]),
+            physicsClientId=self._client)
+
+    def _finish_if_done(self, g, now: float, pos_done: bool) -> None:
+        yaw_done = g.target_yaw is None or self.yaw == g.target_yaw
+        time_done = g.end_time is None or now >= g.end_time
+        if pos_done and yaw_done and time_done:
+            self.goal = None
+            if abs(self.tilt_deg) > 1e-9:
+                self.tilt_deg = 0.0  # arrived: the body levels out
+                self._mirror_pose()
+            if g.kind == "land":
+                self.flying = False
+                self.vel[:] = 0.0
+                if self.landing_scorer is not None:
+                    self.landing_scorer.record_landing(self)  # part-1 referee
+            g.complete(True, f"{g.kind} complete")
+
+    def _step_crisp(self, g, dt: float, now: float) -> None:
+        """The original snap-to-target stepper (motion.realistic=False):
+        exact geometry for deterministic tests."""
         moved = False
         if g.target_pos is not None:
             delta = g.target_pos - self.pos
@@ -238,30 +317,76 @@ class SimDrone:
                 elif step_len > 0.0:
                     self.pos = self.pos + delta * (step_len / dist)
                 moved = True
-        if g.target_yaw is not None and self.yaw != g.target_yaw:
-            dyaw = g.target_yaw - self.yaw
-            step_yaw = g.yaw_rate_rps * dt
-            if abs(dyaw) <= step_yaw:
-                self.yaw = g.target_yaw
-            else:
-                self.yaw += math.copysign(step_yaw, dyaw)
-            moved = True
+        moved |= self._yaw_step(g, dt)
         if moved:
-            p.resetBasePositionAndOrientation(
-                self.body_id, self.pos.tolist(),
-                p.getQuaternionFromEuler([0.0, 0.0, self.yaw]),
-                physicsClientId=self._client)
+            self._mirror_pose()
+        pos_done = g.target_pos is None or bool(
+            np.all(self.pos == g.target_pos))
+        self._finish_if_done(g, now, pos_done)
 
-        pos_done = g.target_pos is None or bool(np.all(self.pos == g.target_pos))
-        yaw_done = g.target_yaw is None or self.yaw == g.target_yaw
-        time_done = g.end_time is None or now >= g.end_time
-        if pos_done and yaw_done and time_done:
-            self.goal = None
-            if g.kind == "land":
-                self.flying = False
-                if self.landing_scorer is not None:
-                    self.landing_scorer.record_landing(self)  # part-1 referee
-            g.complete(True, f"{g.kind} complete")
+    def _step_realistic(self, g, dt: float, now: float) -> None:
+        """Behavioural motion: accel/decel ramps, tilt-to-translate, momentum
+        with mild overshoot+settle, command latency, asymmetric climb/descent,
+        optional gentle wind. Honest BEHAVIOUR — NOT firmware dynamics (the
+        Hula has no SITL to replicate)."""
+        if now < g.exec_after:
+            return  # command latency: the airframe has not reacted yet
+        # Desired velocity: cruise far out, sqrt-braking near the target,
+        # slightly under-braked (overshoot_frac) => momentum carries it past,
+        # then the same law settles it back onto the waypoint.
+        vdes = np.zeros(3)
+        if g.target_pos is not None:
+            err = g.target_pos - self.pos
+            brake = 1.0 + self._overshoot
+            eh = err.copy()
+            eh[2] = 0.0
+            dh = float(np.linalg.norm(eh))
+            if dh > 1e-9 and g.speed_mps > 0.0:
+                v_h = min(g.speed_mps,
+                          math.sqrt(2.0 * self._accel * dh) * brake)
+                vdes[0:2] = eh[0:2] / dh * v_h
+            ez = float(err[2])
+            if abs(ez) > 1e-9:
+                cap_v = (float(self.cfg.velocity_levels.climb_mps) if ez > 0
+                         else float(self.cfg.velocity_levels.descent_mps))
+                vdes[2] = math.copysign(
+                    min(cap_v, math.sqrt(2.0 * self._accel * abs(ez)) * brake),
+                    ez)
+        # Acceleration-limited ramp toward the desired velocity (no steps).
+        dv = vdes - self.vel
+        dvn = float(np.linalg.norm(dv))
+        max_dv = self._accel * dt
+        applied = dv if dvn <= max_dv else dv * (max_dv / dvn)
+        self.vel = self.vel + applied
+        # Tilt-to-translate: body pitch tracks the applied horizontal
+        # acceleration along the nose (negative = nose down = accelerating);
+        # levels out at cruise, counter-tilts while braking.
+        acc = applied / dt if dt > 0 else applied * 0.0
+        a_fwd = float(acc[0] * math.cos(self.yaw)
+                      + acc[1] * math.sin(self.yaw))
+        self.tilt_deg = max(-self._max_tilt,
+                            min(self._max_tilt,
+                                -self._max_tilt * a_fwd / self._accel))
+        if self._wind_mps > 0.0:
+            # Gentle OU wind nudging the TRUE position while airborne,
+            # calibrated so the stationary wind speed ~= wind_mps.
+            tau_w = 5.0
+            self._wind_vec += (-self._wind_vec * (dt / tau_w)
+                               + self._wind_rng.normal(
+                                   0.0, self._wind_mps
+                                   * math.sqrt(2.0 / tau_w) * math.sqrt(dt),
+                                   2))
+            self.pos[0:2] += self._wind_vec * dt
+        moved = bool(np.linalg.norm(self.vel) > 1e-6)
+        if moved:
+            self.pos = self.pos + self.vel * dt
+        moved |= self._yaw_step(g, dt)
+        if moved or abs(self.tilt_deg) > 0.01:
+            self._mirror_pose()
+        pos_done = g.target_pos is None or (
+            float(np.linalg.norm(g.target_pos - self.pos)) <= self._arrive_tol
+            and float(np.linalg.norm(self.vel)) <= self._arrive_speed)
+        self._finish_if_done(g, now, pos_done)
 
     # ------------------------------------------------------------------ #
     # Telemetry reads — SIM THREAD ONLY (called via run_on_sim_thread)
@@ -288,7 +413,10 @@ class SimDrone:
         real drone later — relative-to-takeoff matches IMU re-zeroing.)"""
         fr = self._frame_or_provisional()
         yaw_deg = math.degrees(self.yaw - fr.psi0) % 360.0
-        return Orientation(yaw=yaw_deg, pitch=0.0, roll=0.0)
+        # pitch = the live tilt-to-translate body angle (negative = nose
+        # down, accelerating); always 0.0 in crisp-motion mode.
+        return Orientation(yaw=yaw_deg, pitch=round(self.tilt_deg, 2),
+                           roll=0.0)
 
     def telemetry_altitude(self) -> float:
         """Downward ToF, cm: real ray-cast distance to whatever is below
@@ -427,10 +555,16 @@ class SimDrone:
             est += abs(target_yaw - self.yaw) / yaw_rate_rps
         if end_time is not None:
             est += max(0.0, end_time - now)
+        if self._realistic:
+            # ramps + latency + settle take real time beyond distance/speed
+            est += self._latency + 2.0
+            if speed_mps > 0.0:
+                est += 2.0 * speed_mps / self._accel
         g = Goal(kind, target_pos=target_pos, target_yaw=target_yaw,
                  speed_mps=speed_mps, yaw_rate_rps=yaw_rate_rps,
                  end_time=end_time,
-                 deadline=now + est * _TIMEOUT_MARGIN + _TIMEOUT_BASE_S)
+                 deadline=now + est * _TIMEOUT_MARGIN + _TIMEOUT_BASE_S,
+                 exec_after=now + (self._latency if self._realistic else 0.0))
         if self.monitor is not None and kind != "avoid_step":
             self.monitor.record_command(self.index, kind)  # reflexes exempt
         if self.goal is not None:

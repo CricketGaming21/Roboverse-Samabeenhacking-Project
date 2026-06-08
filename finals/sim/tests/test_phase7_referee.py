@@ -27,6 +27,7 @@ from simcore.viz import TopDownView
 def cfg():
     c = load_config("sim_config.yaml")
     c.meta.real_time_factor = 10.0
+    c.motion.realistic = False  # crisp snap motion: exact geometry under test
     c.arena.layout = "procedural"  # authored map off: clean nadir views
     c.arena.obstacles.count = 0
     c.scenario.phases = "ambush"   # part-2 referee judges only in AMBUSH
