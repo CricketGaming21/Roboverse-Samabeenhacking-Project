@@ -236,12 +236,19 @@ class ConvoyConfig:
     trunk: list = field(default_factory=lambda: [
         [1.0, 0.8], [2.5, 1.5], [4.0, 2.0]])
     split_index: int = 2              # after trunk[split_index], branch off
+    # Long, winding per-rover loops traced from the reference image (not
+    # straight hops); each loops via loiter=loop. Threaded between the
+    # crates and through the arch — the phase-11 full-path test enforces it.
     branches: list = field(default_factory=lambda: [
-        [[5.0, 1.0], [7.0, 1.0]],
-        [[5.5, 2.2], [6.5, 3.2], [8.0, 3.6]],
-        [[4.0, 4.4], [6.0, 5.0], [8.5, 5.0]],
-        [[4.0, 4.0], [3.0, 5.0]],
-        [[5.5, 2.5], [8.0, 2.0]],
+        [[5.0, 1.2], [6.5, 0.9], [8.0, 1.2], [8.6, 2.2], [7.5, 2.6],
+         [6.0, 2.2], [5.0, 1.8]],
+        [[5.6, 2.2], [7.0, 2.6], [8.2, 3.4], [8.6, 2.6], [7.4, 2.0],
+         [6.3, 1.6]],
+        [[4.0, 4.3], [5.8, 4.6], [7.0, 5.2], [8.5, 5.2], [9.4, 5.05],
+         [9.4, 3.7], [8.6, 3.6], [7.0, 3.7], [6.2, 4.5]],
+        [[4.0, 4.0], [3.2, 4.8], [2.2, 5.2], [1.5, 4.3], [2.4, 3.9],
+         [3.2, 4.2]],
+        [[5.5, 2.4], [7.0, 2.1], [8.4, 2.4], [9.4, 3.2], [9.4, 4.0]],
     ])
     loiter: str = "loop"              # loop the branch | hold at the end
 

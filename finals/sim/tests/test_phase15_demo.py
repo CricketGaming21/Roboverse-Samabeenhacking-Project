@@ -66,11 +66,11 @@ def test_demo_is_a_fixed_script_not_a_strategy():
     queries, no inter-drone coordination state."""
     assert isinstance(demo.OBSERVE_STATIONS, tuple)
     assert len(demo.OBSERVE_STATIONS) == 3
-    for stations in demo.OBSERVE_STATIONS:
-        assert isinstance(stations, tuple)
-        assert all(isinstance(wp, tuple) and len(wp) == 2 for wp in stations)
+    for station in demo.OBSERVE_STATIONS:   # one fixed hover point per drone
+        assert isinstance(station, tuple) and len(station) == 2
     assert isinstance(demo.DEPLOY_PAD_INDEX, tuple)
-    assert isinstance(demo.OBSERVE_PITCH_SWEEP, tuple)
+    assert isinstance(demo.LOCKON_PITCH_SEQ, tuple)   # fixed keyframes
+    assert isinstance(demo.LOCKON_TARGETS, tuple)
 
     src = inspect.getsource(demo)
     for forbidden in ("cv2", "detectMarkers", "latest_frame", "to_rgb",

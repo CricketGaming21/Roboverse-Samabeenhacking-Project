@@ -163,12 +163,19 @@ rovers:
     speed_mps: 0.4
     trunk: [[1.0, 0.8], [2.5, 1.5], [4.0, 2.0]]  # shared path from the entrance
     split_index: 2         # after this trunk waypoint each rover branches
-    branches:              # one per rover; threaded between the crates
-      - [[5.0, 1.0], [7.0, 1.0]]                 # west lane
-      - [[5.5, 2.2], [6.5, 3.2], [8.0, 3.6]]     # centre-east, skirts the plus
-      - [[4.0, 4.4], [6.0, 5.0], [8.5, 5.0]]     # through the C4/C1 gap, east lane
-      - [[4.0, 4.0], [3.0, 5.0]]                 # gap then south-east
-      - [[5.5, 2.5], [8.0, 2.0]]                 # west of the central plus
+    # Long WINDING LOOPS traced from the reference image (loiter=loop cycles
+    # them) — not straight hops. Threaded between the crates / through the
+    # arch; the phase-11 full-path clearance test rejects a clipping edit.
+    branches:              # one per rover
+      - [[5.0, 1.2], [6.5, 0.9], [8.0, 1.2], [8.6, 2.2], [7.5, 2.6],
+         [6.0, 2.2], [5.0, 1.8]]                 # south-west loop
+      - [[5.6, 2.2], [7.0, 2.6], [8.2, 3.4], [8.6, 2.6], [7.4, 2.0],
+         [6.3, 1.6]]                             # centre loop, east of the plus
+      - [[4.0, 4.3], [5.8, 4.6], [7.0, 5.2], [8.5, 5.2], [9.4, 5.05],
+         [9.4, 3.7], [8.6, 3.6], [7.0, 3.7], [6.2, 4.5]]  # east loop, thru the arch
+      - [[4.0, 4.0], [3.2, 4.8], [2.2, 5.2], [1.5, 4.3], [2.4, 3.9],
+         [3.2, 4.2]]                             # north-west loop via the gap
+      - [[5.5, 2.4], [7.0, 2.1], [8.4, 2.4], [9.4, 3.2], [9.4, 4.0]]  # north lane loop
     loiter: loop           # loop the branch | hold at the end
   patrol:
     mode: waypoint_random            # random waypoints within bounds
