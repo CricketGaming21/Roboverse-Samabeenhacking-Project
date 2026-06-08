@@ -19,11 +19,17 @@ from simcore.config import load_config
 def _cfg():
     c = load_config("sim_config.yaml")
     c.meta.real_time_factor = 10.0
-    c.scenario.episode_seconds = 45.0
-    c.scenario.ambush_seconds = 35.0
-    c.scenario.deploy_timeout_s = 25.0
+    c.scenario.episode_seconds = 75.0
+    c.scenario.ambush_seconds = 65.0
+    c.scenario.deploy_timeout_s = 40.0
     c.scenario.ambush_trigger.mode = "on_all_landed"
     c.scenario.ambush_trigger.delay_s = 1.0
+    # This suite tests the LOCK-ON mechanism, not the deliberate pacing
+    # (that's Phase 24's). Use a faster convoy + tighter stagger so a rover
+    # reaches its station soon after the (now slower) deploy completes, while
+    # the observer is holding; routes/loiter unchanged.
+    c.rovers.convoy.speed_mps = 0.6
+    c.rovers.convoy.entry_stagger_s = 1.0
     return c
 
 
@@ -83,13 +89,21 @@ def test_demo_observers_hold_and_lockon_is_gradual():
     assert max_dev <= 0.55, f"observer wandered {max_dev:.2f} m (not holding)"
 
     # --- the scripted gradual lock-on: pitch + position TOGETHER -------- #
-    window = [(t, d) for t, d in on_station if d[3] < 89.0]
-    assert window, "the scripted lock-on never ran"
+    # The rover loops past the station several times in the long episode, so
+    # take the FIRST contiguous lock-on window (a run of pitch < 89), not the
+    # global span across multiple passes.
+    tilted = [(t, d) for t, d in on_station if d[3] < 89.0]
+    assert tilted, "the scripted lock-on never ran"
+    window = [tilted[0]]
+    for (t_prev, _dp), (t_cur, d_cur) in zip(tilted, tilted[1:]):
+        if t_cur - t_prev > 2.0:        # gap => a separate later pass
+            break
+        window.append((t_cur, d_cur))
     t_w0, t_w1 = window[0][0], window[-1][0]
     # Gradual, never a snap. (Crisp-motion keyframes take ~2 s; with the
     # phase-18 realistic model each micro-move adds latency+ramp+settle,
-    # stretching the eased window to ~5 s — still smooth, asserted below.)
-    assert 1.0 <= t_w1 - t_w0 <= 6.5
+    # stretching one eased window to ~5 s — still smooth, asserted below.)
+    assert 1.0 <= t_w1 - t_w0 <= 8.0
     pitches = [d[3] for _t, d in window]
     assert len(set(pitches)) >= 4                  # eased through keyframes
     assert min(pitches) <= 70.0                    # tilted well off nadir
@@ -106,10 +120,12 @@ def test_demo_observers_hold_and_lockon_is_gradual():
     assert dot >= 0.6                              # toward the approaching rover
     assert d_max[3] <= 85.0                        # pitch + position together
 
-    # eased BACK afterwards: later samples re-centred at nadir
-    after = [(t, d) for t, d in on_station if t > t_w1 + 1.0]
+    # eased BACK after this pass: the first samples once the window ends are
+    # re-centred at the station at nadir (before any later pass).
+    after = [(t, d) for t, d in on_station
+             if t_w1 + 0.5 < t < t_w1 + 3.0]
     if after:                                      # (episode may end first)
-        t_a, d_a = after[-1]
+        t_a, d_a = after[0]
         assert math.dist(d_a[:2], station) <= 0.30
         assert d_a[3] == 90.0
 

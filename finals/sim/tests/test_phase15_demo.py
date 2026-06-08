@@ -56,8 +56,10 @@ def test_full_demo_runs_both_phases_and_scores():
     moved = any(s0[2] != s1[2] for s0, s1 in zip(ambush, ambush[1:]))
     assert moved                                   # convoy ran in AMBUSH
 
-    # thrash report has the deliberate demo content
-    assert sum(result["monitor"]["preemptions"].values()) >= 1
+    # Phase 24: the demo is now cleanly paced — NO command thrash (every
+    # command is blocking + sequential), so the monitor stays silent.
+    assert sum(result["monitor"]["preemptions"].values()) == 0
+    assert sum(result["monitor"]["rate_warnings"].values()) == 0
 
 
 def test_demo_is_a_fixed_script_not_a_strategy():

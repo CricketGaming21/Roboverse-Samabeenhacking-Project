@@ -126,20 +126,34 @@ class VelocityLevelsConfig:
 
 
 @dataclass
+class WindConfig:
+    """Optional gentle wind disturbance. OFF by default — a hovering drone
+    must not visibly sway. When enabled, keep speed_mps small."""
+    enabled: bool = False
+    speed_mps: float = 0.08
+
+
+@dataclass
 class MotionConfig:
-    """Airframe motion realism. This models BEHAVIOUR (ramps, momentum,
-    settling, latency, bounded drift) — it is NOT a firmware-accurate
-    dynamics replica; the Hula has no SITL to replicate. realistic=False
-    restores crisp snap-to-target motion for deterministic geometry tests.
-    max_tilt_deg is BODY tilt-to-translate — not the camera."""
+    """Airframe motion realism. This models BEHAVIOUR (ramps, settling,
+    latency, slow bounded drift) — it is NOT a firmware-accurate dynamics
+    replica; the Hula has no SITL to replicate. realistic=False restores
+    crisp snap-to-target motion for deterministic geometry tests.
+    max_tilt_deg is BODY tilt-to-translate — not the camera.
+
+    Tuned for CRITICALLY-DAMPED, smooth flight (no wobble/ringing):
+    overshoot_frac 0 => the approach decelerates to arrive with zero residual
+    velocity (no oscillation); tilt is rate-limited (tilt_rate_dps) so the
+    body never snaps; wind is off by default."""
     realistic: bool = True
     max_tilt_deg: float = 20.0        # confirmed spec
     accel_mps2: float = 1.2           # accel/decel ramp to/from cruise
     latency_s: float = 0.08           # command-to-motion latency
-    overshoot_frac: float = 0.15      # under-braking => mild overshoot+settle
+    overshoot_frac: float = 0.0       # 0 = critically damped, no overshoot
+    tilt_rate_dps: float = 90.0       # max body-tilt change rate (no snapping)
     arrive_tol_m: float = 0.04        # settled-position tolerance
     arrive_speed_mps: float = 0.08    # ...and residual-speed tolerance
-    wind_mps: float = 0.0             # optional gentle wind (0 = off)
+    wind: WindConfig = field(default_factory=WindConfig)
     manual_timeout_s: float = 1.0     # stick frames older than this (sim s)
                                       # read as zero input (coast + hold)
 
@@ -184,13 +198,17 @@ class UWBConfig:
 
 @dataclass
 class PositionDriftConfig:
-    """get_position() estimate error: mean-reverting (OU), CALIBRATED to the
-    confirmed optical-flow accuracy — it wanders to ~±bound and stays
-    BOUNDED there, never unbounded. UWB never drifts (the asymmetry)."""
+    """get_position() estimate error: a SLOW, LOW-FREQUENCY, strictly bounded
+    wander (sum of a few long-period sinusoids), calibrated to the confirmed
+    optical-flow accuracy — |drift| <= horizontal_bound_m, no high-frequency
+    jitter. UWB never drifts (the asymmetry). period_*_s set the wander
+    timescale (seconds, not ticks)."""
     enabled: bool = True
-    horizontal_bound_m: float = 0.20  # confirmed ±20 cm horizontal (~2 sigma)
+    horizontal_bound_m: float = 0.20  # confirmed ±20 cm horizontal
     vertical_bound_m: float = 0.10    # confirmed ±10 cm vertical
-    tau_s: float = 20.0               # mean-reversion time constant
+    n_components: int = 3             # summed sinusoids per axis
+    period_min_s: float = 8.0         # slowest/fastest wander periods
+    period_max_s: float = 30.0
 
 
 @dataclass
@@ -248,8 +266,8 @@ class ConvoyConfig:
     scenario.entrance, shared trunk, per-rover branches, loiter. The routes
     are AUTHORED to thread between the crate clusters — nudge coordinates
     here, never add evasion logic."""
-    entry_stagger_s: float = 2.0      # gap between successive rovers entering
-    speed_mps: float = 0.4
+    entry_stagger_s: float = 4.0      # gap between successive rovers entering
+    speed_mps: float = 0.25           # slow, deliberate crawl
     trunk: list = field(default_factory=lambda: [
         [1.0, 0.8], [2.5, 1.5], [4.0, 2.0]])
     split_index: int = 2              # after trunk[split_index], branch off
@@ -301,7 +319,8 @@ class AmbushTriggerConfig:
 class ScenarioConfig:
     """Two-phase episode: DEPLOY (land on pads) -> AMBUSH (convoy) -> DONE."""
     phases: str = "both"          # deploy | ambush | both
-    episode_seconds: float = 180.0  # total run length (sim time)
+    episode_seconds: float = 270.0  # total run length (sim time) — long &
+                                    # deliberate so every system is observable
     deploy_timeout_s: float = 90.0  # max part-1 time; then AMBUSH is forced
     ambush_seconds: float = 120.0   # how long the convoy phase runs
     entrance: list = field(default_factory=lambda: [0.5, 0.5])  # arena (n, e)

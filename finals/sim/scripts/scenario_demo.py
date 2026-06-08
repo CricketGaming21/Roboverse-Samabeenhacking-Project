@@ -35,7 +35,7 @@ import threading
 import time
 
 from pyhulax import DroneAPI
-from pyhulax.core import CameraPitchMode, Direction
+from pyhulax.core import CameraPitchMode, VelocityLevel
 
 from simcore import frames, rover_model
 from simcore.config import load_config
@@ -54,18 +54,23 @@ LOCKON_TARGETS = (0, 2, 3)          # drone i scripts against this rover
 # and back as it passes underneath; position eases out-and-back in sync.
 LOCKON_PITCH_SEQ = (90, 84, 77, 70, 64, 70, 77, 84, 90)
 LOCKON_EASE_M = 0.25
-LOCKON_STEP_S = 0.15                # per keyframe (~2 s total incl. eases)
+LOCKON_STEP_S = 0.4                 # per keyframe; spaced > the thrash gate
 LOCKON_LEAD_S = 1.0                 # start this long before the pass
+MIN_EASE_STEP_M = 0.08              # only move_to when the ease shifts >= this
 OBSERVE_ALT_CM = 150
+# Deliberate demo speed: programming-mode SLOW/MEDIUM (<=0.5 m/s), not the
+# 0.8-1.0 band cap. Smooth, slow, watchable.
+DEMO_SPEED = VelocityLevel.MEDIUM   # 0.5 m/s
 
 
-def _goto(d, cfg, north, east, z_cm=OBSERVE_ALT_CM):
+def _goto(d, cfg, north, east, z_cm=OBSERVE_ALT_CM, speed=DEMO_SPEED):
     """move_to an arena point via the drone's LIVE takeoff frame (re-takeoffs
-    re-anchor the frame, so the config start is not usable here)."""
+    re-anchor the frame, so the config start is not usable here), at a slow
+    deliberate demo speed."""
     reg, drone = d._reg, d._drone
     fr = reg.run_on_sim_thread(lambda: drone.takeoff_frame)
     x_cm, y_cm, _ = frames.arena_to_takeoff_cm(cfg, fr, north, east)
-    d.move_to(x_cm, y_cm, z_cm)
+    d.move_to(x_cm, y_cm, z_cm, speed=speed)
 
 
 # ---- deterministic pass times from CONFIG (no sensing anywhere) ----------- #
@@ -112,18 +117,17 @@ def _approach_dir(cfg, rover_idx, station):
 # ---- the canned flights ---------------------------------------------------- #
 
 def _fly_deploy(cfg, i, errors):
-    """PART-1 canned hop: entrance -> designated pad -> land."""
+    """PART-1 canned hop: entrance -> designated pad -> land. Every command
+    is BLOCKING and sequential — each completes before the next is issued, so
+    no command preempts an unfinished one and the rate stays well under the
+    monitor gate (no thrash warnings)."""
     try:
         pad = cfg.pads[DEPLOY_PAD_INDEX[i]]
         d = DroneAPI()
         d.connect(cfg.drones.units[i].ip)
         d.takeoff(150)
         _goto(d, cfg, pad.north, pad.east)
-        d.hover(0.5)
-        if i == 0:  # deliberate thrash demo so the report has content
-            d.move(Direction.FORWARD, 60, blocking=False)
-            d.move(Direction.BACK, 30, blocking=False)
-            d.hover(0.5)
+        d.hover(1.0)
         d.land()
     except Exception as e:  # surfaced by the director
         errors.append(e)
@@ -146,7 +150,7 @@ def _fly_observe(cfg, i, stop_evt, errors):
                                   horizon_s=cfg.scenario.episode_seconds)
         d.takeoff(OBSERVE_ALT_CM)
         d.set_camera_angle(CameraPitchMode.DOWN_ABSOLUTE, 90)
-        _goto(d, cfg, *station)
+        _goto(d, cfg, station[0], station[1])
         next_pass = 0
         while not stop_evt.is_set():
             now = reg.sim_time()
@@ -159,17 +163,24 @@ def _fly_observe(cfg, i, stop_evt, errors):
             if now < passes[next_pass] - LOCKON_LEAD_S:
                 d.hover(0.3)    # HOLD the station until the scripted window
                 continue
-            # Scripted GRADUAL lock-on: pitch + position ease together over
-            # ~2 s toward the rover's approach, then back. Fixed keyframes.
+            # Scripted GRADUAL lock-on: pitch eases every keyframe (free,
+            # not a motion command) while the position eases out toward the
+            # rover's approach and back. To avoid command thrash, a move_to
+            # is issued ONLY when the eased target shifts meaningfully
+            # (>= MIN_EASE_STEP_M) — tiny near-peak deltas are just a hover.
             steps = len(LOCKON_PITCH_SEQ)
+            last_n, last_e = station
             for k, pitch in enumerate(LOCKON_PITCH_SEQ):
                 if stop_evt.is_set():
                     break
                 d.set_camera_angle(CameraPitchMode.DOWN_ABSOLUTE, pitch)
                 ease = LOCKON_EASE_M * math.sin(math.pi * k / (steps - 1))
-                _goto(d, cfg, station[0] + adir[0] * ease,
-                      station[1] + adir[1] * ease)
-                d.hover(LOCKON_STEP_S)
+                tn = station[0] + adir[0] * ease
+                te = station[1] + adir[1] * ease
+                if math.hypot(tn - last_n, te - last_e) >= MIN_EASE_STEP_M:
+                    _goto(d, cfg, tn, te)         # a real, well-spaced move
+                    last_n, last_e = tn, te
+                d.hover(LOCKON_STEP_S)            # gradual dwell at this pitch
             next_pass += 1
         d.land()
     except Exception as e:

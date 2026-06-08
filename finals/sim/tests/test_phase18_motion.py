@@ -100,8 +100,13 @@ def test_body_tilts_during_accel_and_levels_at_cruise():
         # level at cruise
         cruise = [abs(ti) for (_t, _p, v, ti) in samples if v > 0.95 * cap]
         assert cruise and min(cruise) < 4.0
-        # settled level at the end
-        assert abs(tilts[-1]) < 4.0
+        # Phase 24: on arrival the body is still counter-tilted from braking
+        # (no snap-to-level); it eases to level over the next ~1 s (rate
+        # limited, smooth) — hover and confirm it has levelled.
+        d.hover(1.2)
+        tilt_after = reg.run_on_sim_thread(
+            lambda: float(reg.drones[0].tilt_deg))
+        assert abs(tilt_after) < 4.0
     finally:
         shutdown_registry()
 
@@ -117,8 +122,10 @@ def test_waypoint_overshoot_is_bounded_then_settles():
         d.move(Direction.FORWARD, 200, blocking=False)  # +2 m north
         samples = _sample_motion(reg, until_goal_done=True)
         ys = [p[1] - p0[1] for _t, p, _v, _ti in samples]
+        # Phase 24: critically damped — essentially no overshoot (a sliver of
+        # discretization slack at most), and it settles on the waypoint.
         overshoot = max(ys) - 2.0
-        assert 0.0 < overshoot <= 0.35        # past the waypoint, bounded
+        assert overshoot <= 0.06              # no meaningful overshoot
         final = ys[-1]
         assert abs(final - 2.0) <= cfg.motion.arrive_tol_m + 0.01  # settled
     finally:
@@ -238,7 +245,8 @@ def test_crisp_mode_remains_exact():
 
 def test_wind_disturbs_hover_but_station_keeping_holds():
     cfg = _cfg()
-    cfg.motion.wind_mps = 0.15
+    cfg.motion.wind.enabled = True
+    cfg.motion.wind.speed_mps = 0.15
     reg = get_registry(cfg)
     try:
         d = _connect(cfg)

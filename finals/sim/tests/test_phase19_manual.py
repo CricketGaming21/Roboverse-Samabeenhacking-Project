@@ -32,7 +32,9 @@ def _cfg(rtf=4.0, wind=0.0):
     c.arena.layout = "procedural"
     c.arena.obstacles.count = 0
     c.rovers.count = 0
-    c.motion.wind_mps = wind
+    if wind:
+        c.motion.wind.enabled = True
+        c.motion.wind.speed_mps = wind
     return c
 
 
@@ -121,7 +123,9 @@ def test_rotate_yaws_ccw_and_forward_is_body_relative():
 # --------------------------------------------------------------------------- #
 
 def test_stopping_inputs_coast_then_station_keep_in_wind():
-    cfg = _cfg(wind=0.15)
+    # rtf 2: more wall headroom so the wall-paced 50 Hz stick frames never go
+    # stale under full-suite load (otherwise the stale-timeout coasts early).
+    cfg = _cfg(rtf=2.0, wind=0.15)
     reg = get_registry(cfg)
     try:
         d = _connect(cfg)

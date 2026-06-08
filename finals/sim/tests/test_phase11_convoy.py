@@ -28,6 +28,12 @@ def _cfg(**overrides):
     c.scoring.enabled = False
     c.scenario.ambush_trigger.mode = "timed"
     c.scenario.ambush_trigger.delay_s = 0.5
+    # This suite tests convoy ROUTING (entry/trunk/branch/loiter/clearance),
+    # not the deliberate pacing (that's Phase 24's). Use the faster legacy
+    # speed/stagger so rovers traverse the long loops within the test window;
+    # routes/loiter/clearance are unchanged by speed.
+    c.rovers.convoy.speed_mps = 0.4
+    c.rovers.convoy.entry_stagger_s = 2.0
     for key, value in overrides.items():
         setattr(c.rovers.convoy, key, value)
     return c
@@ -195,7 +201,7 @@ def test_loiter_hold_parks_at_branch_end():
     cfg = _cfg(loiter="hold", entry_stagger_s=0.5)
     reg = get_registry(cfg)
     try:
-        time.sleep(3.5)  # ~35 sim s: rover 0 finishes its ~7 m route
+        time.sleep(5.0)  # ~50 sim s: rover 0 finishes its long branch loop
         end = tuple(cfg.rovers.convoy.branches[0][-1])
         p1 = reg.rover_arena_positions()[0]
         assert math.dist(p1, end) < 0.1, "rover 0 should hold at its branch end"

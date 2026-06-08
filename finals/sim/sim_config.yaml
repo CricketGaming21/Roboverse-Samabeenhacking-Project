@@ -16,7 +16,7 @@ meta:
 # real day) — mission code can never start it; there is no pyhulax API for it.
 scenario:
   phases: both             # deploy | ambush | both
-  episode_seconds: 180     # total run length (sim time)
+  episode_seconds: 270     # total run length (sim time) — long & deliberate
   deploy_timeout_s: 90     # max time allowed for part 1; then AMBUSH is forced
   ambush_seconds: 120      # how long the convoy phase runs
   entrance: [0.5, 0.5]     # arena (north,east): drones launch / convoy enters
@@ -73,18 +73,24 @@ velocity_levels:           # m/s per pyhulax speed level, capped at 1.0
   descent_mps: 1.0         #                                descend 1.0 m/s
 
 # --- Airframe motion realism ---------------------------------------------------
-# Models BEHAVIOUR (ramps, momentum, settling, latency, bounded drift) — NOT a
+# Models BEHAVIOUR (ramps, settling, latency, slow bounded drift) — NOT a
 # firmware-accurate dynamics replica (the Hula has no SITL). realistic: false
 # restores crisp snap-to-target motion for deterministic geometry tests.
+# Tuned CRITICALLY-DAMPED (no wobble): overshoot_frac 0 = the approach
+# decelerates to arrive with zero residual velocity (no oscillation), tilt is
+# rate-limited so the body never snaps, and wind is OFF by default.
 motion:
   realistic: true
   max_tilt_deg: 20.0       # confirmed max BODY tilt (tilt-to-translate)
   accel_mps2: 1.2          # accel/decel ramp to/from cruise speed
   latency_s: 0.08          # command-to-motion latency
-  overshoot_frac: 0.15     # under-braking => mild overshoot then settle
+  overshoot_frac: 0.0      # 0 = critically damped, no overshoot/ringing
+  tilt_rate_dps: 90.0      # max body-tilt change rate (no snapping/rocking)
   arrive_tol_m: 0.04       # settled-position tolerance
   arrive_speed_mps: 0.08   # ...and residual-speed tolerance
-  wind_mps: 0.0            # optional gentle wind disturbance (0 = off)
+  wind:                    # optional gentle wind — OFF by default (no sway)
+    enabled: false
+    speed_mps: 0.08
   manual_timeout_s: 1.0    # send_manual_control frames older than this
                            # (sim s) read as zero input (coast + hold)
 
@@ -113,13 +119,16 @@ uwb:
   y_origin: 0.0
 
 # --- Onboard position estimate drift (get_position only; UWB never drifts) ----
-# Mean-reverting (OU), calibrated to the confirmed optical-flow accuracy:
-# wanders to ~±bound and stays BOUNDED there — never unbounded.
+# A SLOW, LOW-FREQUENCY, strictly bounded wander (sum of long-period sinusoids),
+# calibrated to the confirmed optical-flow accuracy: |drift| <= bound, no
+# high-frequency jitter. UWB stays truth + small noise, no drift.
 position_drift:
   enabled: true
-  horizontal_bound_m: 0.20 # confirmed ±20 cm horizontal (~2 sigma)
+  horizontal_bound_m: 0.20 # confirmed ±20 cm horizontal
   vertical_bound_m: 0.10   # confirmed ±10 cm vertical
-  tau_s: 20.0              # mean-reversion time constant
+  n_components: 3          # summed sinusoids per axis
+  period_min_s: 8.0        # wander timescale (seconds): slow, not jittery
+  period_max_s: 30.0
 
 # --- Barrier sensors (IR/ToF, blocked/clear per direction) -------------------
 barrier_sensors:
@@ -175,8 +184,8 @@ rovers:
   # Routes are AUTHORED to thread between the crate clusters; the phase-11
   # test rejects any waypoint that clips a footprint (then nudge it here).
   convoy:
-    entry_stagger_s: 2.0   # gap between successive rovers entering
-    speed_mps: 0.4
+    entry_stagger_s: 4.0   # gap between successive rovers entering
+    speed_mps: 0.25        # slow, deliberate crawl
     trunk: [[1.0, 0.8], [2.5, 1.5], [4.0, 2.0]]  # shared path from the entrance
     split_index: 2         # after this trunk waypoint each rover branches
     # Long WINDING LOOPS traced from the reference image (loiter=loop cycles

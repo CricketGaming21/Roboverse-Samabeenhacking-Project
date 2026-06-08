@@ -121,18 +121,27 @@ class SimDrone:
         self.goal = None
 
         # Drifting onboard estimate (optical-flow/IMU): estimate = true pose +
-        # drift_err. Mean-reverting (OU) while flying, CALIBRATED so the
-        # error wanders to ~±horizontal_bound_m and stays BOUNDED there —
-        # the confirmed optical-flow accuracy. UWB never sees it (§5.3).
+        # drift_err. A SLOW, LOW-FREQUENCY, strictly BOUNDED wander — the sum
+        # of a few long-period sinusoids per axis (no high-frequency jitter),
+        # calibrated to the confirmed optical-flow accuracy. Reset to 0 at
+        # takeoff (re-anchor) so it grows from there. UWB never sees it (§5.3).
         pd = cfg.position_drift
         self._drift_enabled = bool(pd.enabled)
-        self._drift_tau = max(float(pd.tau_s), 1e-3)
-        # OU stationary std = sigma*sqrt(tau/2); bound ~= 2*std.
-        self._drift_sig_h = (float(pd.horizontal_bound_m) / 2.0) \
-            * math.sqrt(2.0 / self._drift_tau)
-        self._drift_sig_v = (float(pd.vertical_bound_m) / 2.0) \
-            * math.sqrt(2.0 / self._drift_tau)
-        self._drift_rng = np.random.default_rng([cfg.meta.seed, 1000 + index])
+        self._drift_t = 0.0               # sim seconds since takeoff
+        rng = np.random.default_rng([cfg.meta.seed, 1000 + index])
+        n = max(1, int(pd.n_components))
+        # per-axis: amplitudes summing to the bound, random periods + dirs;
+        # zero phase => drift(0) = 0 exactly (clean re-anchor at takeoff).
+        self._drift_freq = 2.0 * math.pi / rng.uniform(
+            pd.period_min_s, pd.period_max_s, (3, n))
+        amp = rng.uniform(0.4, 1.0, (3, n))
+        amp /= amp.sum(axis=1, keepdims=True)   # rows sum to 1
+        # Split the horizontal budget across x and y by sqrt(2) so the
+        # horizontal NORM (not just each axis) stays <= horizontal_bound_m.
+        hb = pd.horizontal_bound_m / math.sqrt(2.0)
+        bounds = np.array([hb, hb, pd.vertical_bound_m])
+        self._drift_amp = amp * bounds[:, None] * rng.choice([-1.0, 1.0],
+                                                             (3, n))
         self.drift_err = np.zeros(3)      # world metres, estimate minus truth
 
         # Realistic motion model (config motion.*): BEHAVIOUR ONLY — ramps,
@@ -145,9 +154,11 @@ class SimDrone:
         self._max_tilt = float(m.max_tilt_deg)
         self._latency = float(m.latency_s)
         self._overshoot = float(m.overshoot_frac)
+        self._tilt_rate = float(m.tilt_rate_dps)
         self._arrive_tol = float(m.arrive_tol_m)
         self._arrive_speed = float(m.arrive_speed_mps)
-        self._wind_mps = float(m.wind_mps)
+        self._wind_on = bool(m.wind.enabled)
+        self._wind_mps = float(m.wind.speed_mps)
         self._wind_rng = np.random.default_rng([cfg.meta.seed, 4000 + index])
         self._wind_vec = np.zeros(2)
         self.vel = np.zeros(3)            # world m/s (realistic mode)
@@ -185,6 +196,7 @@ class SimDrone:
         self.takeoff_frame = frames.capture_takeoff_frame(
             self.pos[0], self.pos[1], self.pos[2] - self._half_z, self.yaw)
         self.drift_err[:] = 0.0  # estimate re-anchors at takeoff
+        self._drift_t = 0.0      # ...and the slow wander restarts from zero
         self.flying = True
         target = self.pos.copy()
         target[2] = self.takeoff_frame.oz + height_cm / 100.0
@@ -253,19 +265,25 @@ class SimDrone:
             drain = self.cfg.drones.battery.drain_pct_per_min * dt / 60.0
             self.battery_pct = max(0.0, self.battery_pct - drain)
         if self.flying and self._drift_enabled:
-            # OU drift: mean-reverting toward zero, bounded near the
-            # configured optical-flow accuracy (never unbounded).
-            e = self.drift_err
-            sq = math.sqrt(dt)
-            e[0:2] += (-e[0:2] * (dt / self._drift_tau)
-                       + self._drift_rng.normal(0.0, self._drift_sig_h * sq, 2))
-            e[2] += (-e[2] * (dt / self._drift_tau)
-                     + self._drift_rng.normal(0.0, self._drift_sig_v * sq))
+            # Low-frequency bounded wander: drift = sum of long-period
+            # sinusoids (zero phase => drift(0)=0 at takeoff). Smooth, slow,
+            # |drift| <= bound by construction (amplitudes sum to the bound).
+            self._drift_t += dt
+            self.drift_err = (self._drift_amp
+                              * np.sin(self._drift_freq * self._drift_t)
+                              ).sum(axis=1)
         if self.flying:
             self._run_reflexes()  # may preempt or stop the active goal
 
         g = self.goal
         if g is None:
+            # Idle (between/after goals): ease the body tilt back to level at
+            # the rate limit — no snapping, no rocking.
+            if self.flying and self._realistic and abs(self.tilt_deg) > 1e-3:
+                step = self._tilt_rate * dt
+                self.tilt_deg -= math.copysign(min(step, abs(self.tilt_deg)),
+                                               self.tilt_deg)
+                self._mirror_pose()
             return
         now = self._clock.now()
         if now >= g.deadline:
@@ -303,12 +321,14 @@ class SimDrone:
         time_done = g.end_time is None or now >= g.end_time
         if pos_done and yaw_done and time_done:
             self.goal = None
-            if abs(self.tilt_deg) > 1e-9:
-                self.tilt_deg = 0.0  # arrived: the body levels out
-                self._mirror_pose()
+            # NOTE: do NOT snap tilt to 0 here — that was a frame-to-frame
+            # jump (rocking). The idle-relax in step() eases it to level at
+            # the rate limit; a landed drone is forced level just below.
             if g.kind == "land":
                 self.flying = False
                 self.vel[:] = 0.0
+                self.tilt_deg = 0.0  # grounded: level (no further stepping)
+                self._mirror_pose()
                 if self.landing_scorer is not None:
                     self.landing_scorer.record_landing(self)  # part-1 referee
             g.complete(True, f"{g.kind} complete")
@@ -351,12 +371,15 @@ class SimDrone:
             eh = err.copy()
             eh[2] = 0.0
             dh = float(np.linalg.norm(eh))
-            if dh > 1e-9 and g.speed_mps > 0.0:
+            # Position deadband: within arrive_tol command ZERO velocity so
+            # the drone decelerates to a dead stop and holds — no limit-cycle
+            # jitter, a rock-steady hover (and the tilt then eases to level).
+            if dh > self._arrive_tol and g.speed_mps > 0.0:
                 v_h = min(g.speed_mps,
                           math.sqrt(2.0 * self._accel * dh) * brake)
                 vdes[0:2] = eh[0:2] / dh * v_h
             ez = float(err[2])
-            if abs(ez) > 1e-9:
+            if abs(ez) > self._arrive_tol:
                 cap_v = (float(self.cfg.velocity_levels.climb_mps) if ez > 0
                          else float(self.cfg.velocity_levels.descent_mps))
                 vdes[2] = math.copysign(
@@ -381,15 +404,26 @@ class SimDrone:
         applied = dv if dvn <= max_dv else dv * (max_dv / dvn)
         self.vel = self.vel + applied
         # Tilt-to-translate: body pitch tracks the applied horizontal
-        # acceleration along the nose (negative = nose down = accelerating);
-        # levels out at cruise, counter-tilts while braking.
+        # acceleration along the nose (negative = nose down = accelerating),
+        # levels at cruise, counter-tilts braking — but RATE-LIMITED so it
+        # eases rather than snapping/rocking frame-to-frame.
         acc = applied / dt if dt > 0 else applied * 0.0
         a_fwd = float(acc[0] * math.cos(self.yaw)
                       + acc[1] * math.sin(self.yaw))
-        self.tilt_deg = max(-self._max_tilt,
-                            min(self._max_tilt,
-                                -self._max_tilt * a_fwd / self._accel))
-        if self._wind_mps > 0.0:
+        # Deadband: only tilt for SUSTAINED translation accel. Station-keeping
+        # micro-corrections (|a_fwd| << accel) leave the body level rather than
+        # holding a residual tilt — a hovering drone sits flat, no wobble.
+        if abs(a_fwd) < 0.15 * self._accel:
+            tilt_target = 0.0
+        else:
+            tilt_target = max(-self._max_tilt,
+                              min(self._max_tilt,
+                                  -self._max_tilt * a_fwd / self._accel))
+        max_step = self._tilt_rate * dt
+        dtilt = tilt_target - self.tilt_deg
+        self.tilt_deg += (dtilt if abs(dtilt) <= max_step
+                          else math.copysign(max_step, dtilt))
+        if self._wind_on and self._wind_mps > 0.0:
             # Gentle OU wind nudging the TRUE position while airborne,
             # calibrated so the stationary wind speed ~= wind_mps.
             tau_w = 5.0
