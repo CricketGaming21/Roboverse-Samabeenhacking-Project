@@ -140,6 +140,8 @@ class MotionConfig:
     arrive_tol_m: float = 0.04        # settled-position tolerance
     arrive_speed_mps: float = 0.08    # ...and residual-speed tolerance
     wind_mps: float = 0.0             # optional gentle wind (0 = off)
+    manual_timeout_s: float = 1.0     # stick frames older than this (sim s)
+                                      # read as zero input (coast + hold)
 
 
 @dataclass

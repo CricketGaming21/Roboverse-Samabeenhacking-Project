@@ -153,6 +153,14 @@ class SimDrone:
         self.vel = np.zeros(3)            # world m/s (realistic mode)
         self.tilt_deg = 0.0               # body pitch; negative = nose down
 
+        # Manual (stick) control — send_manual_control / manual_fly. The sim
+        # EXECUTES the inputs faithfully and contains NO PID: the control
+        # loop that picks stick values is mission code.
+        self.manual_stick = np.zeros(4)   # forward, right, up, rotate
+        self._stick_fresh_until = 0.0     # sim time the inputs go stale
+        self._hold_anchor = None          # zero-stick station-keep point
+        self._manual_timeout = float(m.manual_timeout_s)
+
         # Reflexes (§4.4) — both route through the SAME committing executor.
         self.barrier_mode = False         # firmware auto-avoid (stop short)
         self.avoidance_rule = None        # (Direction, distance_m, mask) or None
@@ -264,7 +272,9 @@ class SimDrone:
             self.goal = None
             g.complete(False, f"{g.kind} timed out (sim-time deadline)")
             return
-        if self._realistic:
+        if g.kind == "manual":
+            self._step_manual(g, dt, now)  # always dynamic, never snaps
+        elif self._realistic:
             self._step_realistic(g, dt, now)
         else:
             self._step_crisp(g, dt, now)
@@ -352,6 +362,18 @@ class SimDrone:
                 vdes[2] = math.copysign(
                     min(cap_v, math.sqrt(2.0 * self._accel * abs(ez)) * brake),
                     ez)
+        moved = self._apply_velocity_dynamics(vdes, dt)
+        moved |= self._yaw_step(g, dt)
+        if moved or abs(self.tilt_deg) > 0.01:
+            self._mirror_pose()
+        pos_done = g.target_pos is None or (
+            float(np.linalg.norm(g.target_pos - self.pos)) <= self._arrive_tol
+            and float(np.linalg.norm(self.vel)) <= self._arrive_speed)
+        self._finish_if_done(g, now, pos_done)
+
+    def _apply_velocity_dynamics(self, vdes, dt: float) -> bool:
+        """Shared ramp/tilt/wind/integration for target- AND stick-driven
+        flight. Returns True if the position changed."""
         # Acceleration-limited ramp toward the desired velocity (no steps).
         dv = vdes - self.vel
         dvn = float(np.linalg.norm(dv))
@@ -380,13 +402,110 @@ class SimDrone:
         moved = bool(np.linalg.norm(self.vel) > 1e-6)
         if moved:
             self.pos = self.pos + self.vel * dt
-        moved |= self._yaw_step(g, dt)
+        # never integrate through the floor
+        floor = self._ground_z + self._half_z
+        if self.pos[2] < floor:
+            self.pos[2] = floor
+            if self.vel[2] < 0.0:
+                self.vel[2] = 0.0
+        return moved
+
+    def manual_frame(self, forward, right, up, rotate) -> bool:
+        """One ~20 Hz joystick frame (send_manual_control). SIM THREAD ONLY.
+        Returns False (never raises) when the drone cannot accept manual
+        input. Installs/refreshes a persistent 'manual' goal through the SAME
+        committing executor, so blocking commands and manual control never
+        fight — the last command simply wins (preempting the other)."""
+        if not (self.connected and self.flying):
+            return False
+        thr = self.cfg.drones.battery.low_threshold_pct
+        if self.battery_pct < thr:
+            return False
+        if self.goal is None or self.goal.kind != "manual":
+            g = self._install("manual")     # preempts any blocking goal
+            g.deadline = float("inf")       # continuous: lives until replaced
+        sticks = [max(-1.0, min(1.0, float(v)))
+                  for v in (forward, right, up, rotate)]
+        if (abs(sticks[0]) > 1e-3 or abs(sticks[1]) > 1e-3
+                or abs(sticks[2]) > 1e-3):
+            self._hold_anchor = None        # actively flying: drop the hold
+        self.manual_stick[:] = sticks
+        self._stick_fresh_until = self._clock.now() + self._manual_timeout
+        return True
+
+    def _step_manual(self, g, dt: float, now: float) -> None:
+        """Stick-driven flight: inputs map to commanded velocity through the
+        speed band and the SAME accel/tilt limits as everything else. The
+        sim only EXECUTES the inputs — there is no PID in here; closing a
+        loop on what the camera sees is mission code."""
+        if now < g.exec_after:
+            return
+        if now > self._stick_fresh_until:
+            f = r = u = rot = 0.0           # stale control loop: fail safe
+        else:
+            f, r, u, rot = (float(v) for v in self.manual_stick)
+        # Barrier clamping: a stick INTO a tripped (boolean) barrier flag is
+        # zeroed — braking distance keeps the hull clear of contact.
+        if abs(f) > 1e-3 or abs(r) > 1e-3 or u < -1e-3:
+            flags = self.sense_obstacles()
+            if f > 0 and flags.forward:
+                f = 0.0
+            if f < 0 and flags.back:
+                f = 0.0
+            if r > 0 and flags.right:
+                r = 0.0
+            if r < 0 and flags.left:
+                r = 0.0
+            if u < 0 and flags.down:
+                u = 0.0
+        vdes = np.zeros(3)
+        cap_h = float(self.cfg.velocity_levels.TURBO)  # the 0.5-1.0 band cap
+        if abs(f) > 1e-3 or abs(r) > 1e-3 or abs(u) > 1e-3:
+            # Body-relative: +forward = nose, +right = body right (-y FLU).
+            bx, by = f * cap_h, -r * cap_h
+            c, s = math.cos(self.yaw), math.sin(self.yaw)
+            vdes[0] = c * bx - s * by
+            vdes[1] = s * bx + c * by
+            if abs(u) > 1e-3:
+                cap_v = (float(self.cfg.velocity_levels.climb_mps) if u > 0
+                         else float(self.cfg.velocity_levels.descent_mps))
+                vdes[2] = u * cap_v
+        else:
+            # Zero stick: coast to a stop per the motion model, then
+            # STATION-KEEP at the stopping point (holds against wind).
+            if self._hold_anchor is None:
+                if float(np.linalg.norm(self.vel)) <= self._arrive_speed:
+                    self._hold_anchor = self.pos.copy()
+            if self._hold_anchor is not None:
+                err = self._hold_anchor - self.pos
+                brake = 1.0 + self._overshoot
+                eh = err.copy()
+                eh[2] = 0.0
+                dh = float(np.linalg.norm(eh))
+                if dh > 1e-9:
+                    hold_cap = float(self.cfg.velocity_levels.MEDIUM)
+                    v_h = min(hold_cap,
+                              math.sqrt(2.0 * self._accel * dh) * brake)
+                    vdes[0:2] = eh[0:2] / dh * v_h
+                ez = float(err[2])
+                if abs(ez) > 1e-9:
+                    cap_v = (float(self.cfg.velocity_levels.climb_mps)
+                             if ez > 0
+                             else float(self.cfg.velocity_levels.descent_mps))
+                    vdes[2] = math.copysign(
+                        min(cap_v,
+                            math.sqrt(2.0 * self._accel * abs(ez)) * brake),
+                        ez)
+        moved = self._apply_velocity_dynamics(vdes, dt)
+        if abs(rot) > 1e-3:
+            # Continuous yaw rate; positive = CCW, like rotate().
+            self.yaw += rot * math.radians(
+                self.cfg.velocity_levels.yaw_rate_dps) * dt
+            moved = True
         if moved or abs(self.tilt_deg) > 0.01:
             self._mirror_pose()
-        pos_done = g.target_pos is None or (
-            float(np.linalg.norm(g.target_pos - self.pos)) <= self._arrive_tol
-            and float(np.linalg.norm(self.vel)) <= self._arrive_speed)
-        self._finish_if_done(g, now, pos_done)
+        # No completion: the manual goal persists until another command
+        # (blocking or a new mode) preempts it via the executor.
 
     # ------------------------------------------------------------------ #
     # Telemetry reads — SIM THREAD ONLY (called via run_on_sim_thread)

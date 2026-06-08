@@ -12,6 +12,7 @@ configured threshold (land() is never battery-gated). led/flags arguments
 are accepted and ignored by the sim.
 """
 
+import time
 from typing import Optional, Union
 
 from . import _bridge
@@ -103,6 +104,48 @@ class DroneAPI:
         self._require_connection()
         return _bridge.submit(self._reg, self._drone, blocking, "move_to",
                               x=x, y=y, z=z, speed=speed)
+
+    # ------------------------------------------------------------------ #
+    # Manual (stick) control — real-SDK signatures. Continuous ~20 Hz
+    # joystick frames, body-relative, distinct from the blocking commands.
+    # The sim EXECUTES the inputs through the motion model (speed band,
+    # accel/tilt limits, barrier clamping) and contains NO PID — the
+    # control loop that picks stick values (e.g. a lock-on) is mission code.
+    # ------------------------------------------------------------------ #
+
+    def send_manual_control(self, forward: float = 0.0, right: float = 0.0,
+                            up: float = 0.0, rotate: float = 0.0) -> bool:
+        """Send a single manual control frame for joystick-style flight.
+
+        Call at ~20 Hz for smooth control. Inputs are -1..+1, body-relative:
+        positive forward = nose, positive right = body right, positive up =
+        climb, positive rotate = CCW. Zero horizontal stick station-keeps;
+        stale frames (control loop died) coast to a stop and hold. Returns
+        True if the frame was accepted (False when not connected/flying or
+        battery-gated — never raises).
+        """
+        if self._drone is None:
+            return False
+        return _bridge.manual_frame(self._reg, self._drone, forward, right,
+                                    up, rotate)
+
+    def manual_fly(self, duration_sec: float, forward: float = 0.0,
+                   right: float = 0.0, up: float = 0.0, rotate: float = 0.0,
+                   rate_hz: int = 20, on_frame=None) -> bool:
+        """Fly with constant manual inputs for a duration (frames at rate_hz;
+        simultaneous position + yaw, unlike move()/rotate()). on_frame is an
+        optional callback(forward, right, up, rotate, frame_index, ok).
+        Returns True if every frame was accepted."""
+        period = 1.0 / max(int(rate_hz), 1)
+        frames_n = max(1, int(float(duration_sec) * max(int(rate_hz), 1)))
+        all_ok = True
+        for i in range(frames_n):
+            ok = self.send_manual_control(forward, right, up, rotate)
+            all_ok = all_ok and ok
+            if on_frame is not None:
+                on_frame(forward, right, up, rotate, i, ok)
+            time.sleep(period)
+        return all_ok
 
     # ------------------------------------------------------------------ #
     # Telemetry — §4.3 (each raises TelemetryUnavailable if no data yet)

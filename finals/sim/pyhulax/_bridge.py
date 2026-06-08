@@ -91,6 +91,16 @@ def set_avoidance(reg, drone, direction, distance_cm, barrier_mask) -> CommandRe
                                else "avoidance rule disarmed")
 
 
+def manual_frame(reg, drone, forward, right, up, rotate) -> bool:
+    """One joystick frame onto the sim thread. bool semantics like the real
+    SDK (False when the drone can't accept manual input — never raises)."""
+    try:
+        return bool(reg.run_on_sim_thread(
+            lambda: drone.manual_frame(forward, right, up, rotate)))
+    except (RuntimeError, TimeoutError):
+        return False
+
+
 def set_camera_angle(reg, drone, mode, angle) -> CommandResult:
     pitch = reg.run_on_sim_thread(lambda: drone.set_camera_pitch(mode, angle))
     return CommandResult(True, f"camera pitch {pitch:.0f} deg")
