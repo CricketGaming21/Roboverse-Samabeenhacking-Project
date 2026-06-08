@@ -27,6 +27,7 @@ import math
 import threading
 import time
 from dataclasses import dataclass
+from pathlib import Path
 
 import cv2
 import numpy as np
@@ -292,7 +293,41 @@ class Referee:
         detections = [] if ids is None else [
             (int(mid), quad[0]) for mid, quad in zip(ids.flatten(), corners)
             if int(mid) in self._targets]  # rover ids only; pads filtered out
-        return self._judge(drone_index, detections)
+        banked_now = self._judge(drone_index, detections)
+        # Deliberate scan logging: fire ONCE on the banking event (banked_now
+        # is non-empty only when an id is first banked — never per frame).
+        if banked_now:
+            quads = dict(detections)
+            for mid in banked_now:
+                self._save_scan(drone_index, mid, rgb, quads.get(mid))
+        return banked_now
+
+    def _save_scan(self, drone_index: int, marker_id: int, rgb, quad) -> None:
+        """Write logs/scans/<...>.png with the just-banked marker boxed + a
+        log line — visual proof of the scan. Observer-side; gated by config.
+        Failures never disrupt scoring."""
+        side = (max(float(np.linalg.norm(quad[k] - quad[(k + 1) % 4]))
+                    for k in range(4)) if quad is not None else 0.0)
+        now = self._reg.sim_time()
+        self._log.info("SCAN id %d by drone %d  %.0f px  t=%.1fs", marker_id,
+                       drone_index, side, now)
+        if not self._cfg.logging.save_scans:
+            return
+        try:
+            from . import camfeed
+            out_dir = Path(self._cfg.logging.scans_dir)
+            out_dir.mkdir(parents=True, exist_ok=True)
+            bgr = camfeed.box_marker(self._cfg, rgb, quad) if quad is not None \
+                else cv2.cvtColor(rgb, cv2.COLOR_RGB2BGR)
+            cv2.putText(bgr, f"SCANNED id {marker_id}  drone {drone_index}"
+                        f"  t={now:.1f}s", (8, 24),
+                        cv2.FONT_HERSHEY_SIMPLEX, 0.6, (0, 0, 255), 2)
+            path = out_dir / (f"scan_id{marker_id}_drone{drone_index}"
+                              f"_t{now:06.1f}.png")
+            cv2.imwrite(str(path), bgr)
+        except Exception as e:  # logging must never break the referee
+            self._log.warning("scan image save failed for id %d: %s",
+                              marker_id, e)
 
     def _loop(self) -> None:
         reg = self._reg

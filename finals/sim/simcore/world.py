@@ -8,6 +8,7 @@ no movement logic, sensors, or cameras yet. Drone/rover motion in later phases
 is kinematic (resetBasePositionAndOrientation), so they stay massless.
 """
 
+import math
 from dataclasses import dataclass
 
 import pybullet as p
@@ -75,43 +76,91 @@ def _make_agent_box(client, cfg, pose, half_extents, rgba):
                              baseOrientation=orn, physicsClientId=client)
 
 
+_ROVER_RGBA = {
+    "chassis": (0.93, 0.93, 0.95, 1.0),  # white shell, RoboMaster S1 look
+    "wheel": (0.12, 0.12, 0.13, 1.0),    # dark Mecanum wheels
+    "turret": (0.20, 0.22, 0.26, 1.0),   # gimbal/turret block
+    "barrel": (0.10, 0.10, 0.12, 1.0),   # blaster barrel
+}
+
+
 def _make_rover(client, cfg, pose, marker_id) -> int:
-    """Rover body: billboard-textured box + this rover's UNIQUE ArUco marker
-    on the top face (UV quad as a fixed link, facing up — same approach as
-    the pads, so it decodes). One pybullet body per rover."""
+    """Rover body shaped like a RoboMaster-style ground robot — chassis +
+    four Mecanum wheels + a gimbal turret with a barrel — topped by this
+    rover's UNIQUE ArUco marker (UV quad, faces up, decodes like the pads).
+    Real geometry (not a flat billboard) so a mission-side YOLO model could
+    plausibly detect it on a rendered frame.
+
+    NOTE: YOLO itself is MISSION code run on the camera frames — this only
+    makes the rovers visually detectable. A real model is validated on real
+    footage and may need fine-tuning to close the sim-to-real gap."""
     hx, hy, hz = cfg.bodies.rover_half_extents_m
     pos = frames.arena_to_world(cfg, pose.north, pose.east, hz)
     orn = p.getQuaternionFromEuler(
         [0.0, 0.0, frames.heading_to_world_yaw_rad(cfg, pose.heading_deg)])
+    # Collision stays the simple full box (motion/clearance unchanged).
     col = p.createCollisionShape(p.GEOM_BOX, halfExtents=[hx, hy, hz],
                                  physicsClientId=client)
-    vis = p.createVisualShape(p.GEOM_BOX, halfExtents=[hx, hy, hz],
-                              rgbaColor=(1.0, 1.0, 1.0, 1.0),
-                              physicsClientId=client)
+    chassis_h = hz * 0.55
+    chassis = p.createVisualShape(
+        p.GEOM_BOX, halfExtents=[hx * 0.92, hy * 0.78, chassis_h],
+        rgbaColor=_ROVER_RGBA["chassis"], physicsClientId=client)
+
+    # Visual link shapes (mass 0, no collision) assembled around the chassis.
+    link_vis, link_pos, link_orn = [], [], []
+    wheel_r, wheel_w = hz * 0.85, hx * 0.34
+    wheel = p.createVisualShape(
+        p.GEOM_CYLINDER, radius=wheel_r, length=wheel_w,
+        rgbaColor=_ROVER_RGBA["wheel"], physicsClientId=client)
+    wx, wy = hx * 0.72, hy * 0.86
+    wheel_q = list(p.getQuaternionFromEuler([math.pi / 2, 0, 0]))  # axle = y
+    for sx in (-1, 1):
+        for sy in (-1, 1):
+            link_vis.append(wheel)
+            link_pos.append([sx * wx, sy * wy, -hz + wheel_r * 0.7])
+            link_orn.append(wheel_q)
+    # gimbal turret + barrel — mounted FORWARD and kept BELOW the marker
+    # plate so they never occlude the top fiducial.
+    turret_h = hz * 0.28
+    turret_z = chassis_h + turret_h
+    turret = p.createVisualShape(
+        p.GEOM_BOX, halfExtents=[hx * 0.38, hy * 0.34, turret_h],
+        rgbaColor=_ROVER_RGBA["turret"], physicsClientId=client)
+    link_vis.append(turret)
+    link_pos.append([0.0, hy * 0.28, turret_z])   # forward-mounted gimbal
+    link_orn.append([0, 0, 0, 1])
+    barrel = p.createVisualShape(
+        p.GEOM_CYLINDER, radius=hz * 0.10, length=hy * 0.6,
+        rgbaColor=_ROVER_RGBA["barrel"], physicsClientId=client)
+    link_vis.append(barrel)
+    link_pos.append([0.0, hy * 0.7, turret_z])
+    link_orn.append(list(p.getQuaternionFromEuler([math.pi / 2, 0, 0])))
+    # ArUco marker on the VERY top — the highest, widest surface, so nothing
+    # else occludes it from a downward camera (the detectable face). LAST link.
     marker_side = cfg.aruco.rover_marker_size_m * aruco_assets.texture_scale()
-    quad = p.createVisualShape(
+    marker_quad = p.createVisualShape(
         p.GEOM_MESH, fileName=aruco_assets.ensure_quad_obj(marker_id),
         meshScale=[marker_side, marker_side, 1.0],
         rgbaColor=(1.0, 1.0, 1.0, 1.0), physicsClientId=client)
+    link_vis.append(marker_quad)
+    link_pos.append([0.0, 0.0, hz + 0.03])
+    link_orn.append([0, 0, 0, 1])
+    marker_link = len(link_vis) - 1
+
+    n = len(link_vis)
     body = p.createMultiBody(
-        baseMass=0, baseCollisionShapeIndex=col, baseVisualShapeIndex=vis,
+        baseMass=0, baseCollisionShapeIndex=col, baseVisualShapeIndex=chassis,
         basePosition=pos, baseOrientation=orn,
-        linkMasses=[0], linkCollisionShapeIndices=[-1],
-        linkVisualShapeIndices=[quad],
-        linkPositions=[[0.0, 0.0, hz + 0.002]],   # just above the top face
-        linkOrientations=[[0, 0, 0, 1]],
-        linkInertialFramePositions=[[0, 0, 0]],
-        linkInertialFrameOrientations=[[0, 0, 0, 1]],
-        linkParentIndices=[0], linkJointTypes=[p.JOINT_FIXED],
-        linkJointAxis=[[0, 0, 1]], physicsClientId=client)
-    billboard = p.loadTexture(
-        aruco_assets.ensure_billboard_png(cfg.rovers.billboard_texture),
-        physicsClientId=client)
-    p.changeVisualShape(body, -1, textureUniqueId=billboard,
-                        physicsClientId=client)
+        linkMasses=[0] * n, linkCollisionShapeIndices=[-1] * n,
+        linkVisualShapeIndices=link_vis,
+        linkPositions=link_pos, linkOrientations=link_orn,
+        linkInertialFramePositions=[[0, 0, 0]] * n,
+        linkInertialFrameOrientations=[[0, 0, 0, 1]] * n,
+        linkParentIndices=[0] * n, linkJointTypes=[p.JOINT_FIXED] * n,
+        linkJointAxis=[[0, 0, 1]] * n, physicsClientId=client)
     marker = p.loadTexture(aruco_assets.ensure_marker_png(cfg, marker_id),
                            physicsClientId=client)
-    p.changeVisualShape(body, 0, textureUniqueId=marker,
+    p.changeVisualShape(body, marker_link, textureUniqueId=marker,
                         physicsClientId=client)
     return body
 

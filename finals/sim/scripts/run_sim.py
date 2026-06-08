@@ -25,12 +25,13 @@ from simcore.viz import TopDownView
 
 def open_camera_windows(cfg, log):
     """viz.show_camera_windows debug view: one cv2 window per drone showing
-    its live camera stream (the frames detection actually sees)."""
+    its live frame with detected ArUco markers OUTLINED + id labelled
+    (observer-side overlay — the sim's own cv2.aruco, not a mission sensor)."""
     if not (os.environ.get("DISPLAY") or os.environ.get("WAYLAND_DISPLAY")):
         log.warning("show_camera_windows: no display; skipping")
         return []
     from pyhulax import DroneAPI
-    from pyhulax.video import VideoDisplay
+    from simcore.camfeed import MarkerCameraWindow
     pairs = []
     for unit in cfg.drones.units:
         d = DroneAPI()
@@ -38,7 +39,7 @@ def open_camera_windows(cfg, log):
         d.set_video_stream(True)
         stream = d.create_video_stream()
         stream.start()
-        display = VideoDisplay(stream, window_name=f"hula {unit.ip}")
+        display = MarkerCameraWindow(cfg, stream, window_name=f"hula {unit.ip}")
         display.start()
         pairs.append((stream, display))
     return pairs

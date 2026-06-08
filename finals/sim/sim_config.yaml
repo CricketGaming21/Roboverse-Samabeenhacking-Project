@@ -235,3 +235,7 @@ monitor:
 logging:
   level: INFO
   file: logs/sim.log
+  save_scans: true         # on each marker BANK, save logs/scans/<frame>.png
+                           # (marker boxed + a log line) — visual proof of a
+                           # scan; fires once per banking event, not per frame
+  scans_dir: logs/scans

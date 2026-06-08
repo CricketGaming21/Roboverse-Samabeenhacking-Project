@@ -346,6 +346,8 @@ class MonitorConfig:
 class LoggingConfig:
     level: str = "INFO"
     file: str = "logs/sim.log"
+    save_scans: bool = True           # save a boxed frame when a marker banks
+    scans_dir: str = "logs/scans"     # where on-bank scan images are written
 
 
 @dataclass
