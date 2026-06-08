@@ -21,9 +21,17 @@ import cv2
 import numpy as np
 
 from . import camfeed
+from .debug import DebugProbe
 from .log import get_logger
 
 _PHASE_LABEL = {"deploy": "DEPLOY", "ambush": "AMBUSH", "done": "DONE"}
+_GREEN = (90, 230, 120)
+_AMBER = (40, 190, 240)
+_RED = (60, 60, 235)
+_GREY = (170, 170, 170)
+_CAM_H_FRAC = 0.42        # camera feed fraction of a cockpit column
+_PROX_DIRS = (("forward", 0, -1), ("back", 0, 1),   # (flag, dx, dy) on icon
+              ("left", -1, 0), ("right", 1, 0))
 
 
 class ArenaRecorder:
@@ -37,10 +45,20 @@ class ArenaRecorder:
         self._log = get_logger("recorder", self._cfg)
         self._arena_w = int(self._rc.width)
         self._arena_h = int(self._rc.height)
-        # Per-drone camera insets go in a row BELOW the arena view, so the
-        # output canvas is taller than the arena render (Phase 23).
+        # Per-drone COCKPIT COLUMN below the arena view: camera feed +
+        # telemetry panel + car-style proximity graphic, stacked. The band
+        # grows when the panels are on (Phase 25); the canvas is taller than
+        # the arena render either way (Phase 23).
         self._insets = bool(self._rc.show_camera_insets)
-        self._band_h = self._arena_h // 4 if self._insets else 0
+        self._telemetry = bool(self._rc.show_telemetry)
+        self._proximity = bool(self._rc.show_proximity)
+        self._cam_h = self._arena_h // 4 if self._insets else 0
+        # camera tile + a panel region (telemetry/proximity) below it
+        panel_h = (self._arena_h * 5 // 16) if (
+            self._insets and (self._telemetry or self._proximity)) else 0
+        self._panel_h = panel_h
+        self._band_h = self._cam_h + panel_h
+        self._probe = DebugProbe(registry) if self._band_h else None
         self._w = self._arena_w
         self._h = self._arena_h + self._band_h
         self._writer = None          # cv2.VideoWriter, or None for PNG mode
@@ -70,23 +88,108 @@ class ArenaRecorder:
             return arena
         canvas = np.zeros((self._h, self._w, 3), dtype=np.uint8)
         canvas[:self._arena_h] = arena
-        canvas[self._arena_h:] = self._inset_row()
+        canvas[self._arena_h:] = self._cockpit_band()
         return canvas
 
-    def _inset_row(self):
-        """The bottom band: three labelled per-drone camera tiles."""
+    def _cockpit_band(self):
+        """The bottom band: a per-drone COLUMN — camera feed + telemetry
+        panel + car-style proximity graphic. Read-only DebugProbe snapshot
+        feeds the panels (no extra camera renders -> referee_view=False)."""
         drones = self._reg.drones
-        tile_w = self._w // 3
+        snap = (self._probe.snapshot(referee_view=False)
+                if self._probe is not None else {"drones": []})
+        dsnaps = {d["index"]: d for d in snap.get("drones", [])}
+        col_w = self._w // 3
         band = np.full((self._band_h, self._w, 3), 30, dtype=np.uint8)
         for i in range(3):
-            x0 = i * tile_w
-            x1 = self._w if i == 2 else x0 + tile_w
-            tile = self._drone_tile(drones[i] if i < len(drones) else None,
-                                    x1 - x0, self._band_h)
-            band[:, x0:x1] = tile
+            x0 = i * col_w
+            x1 = self._w if i == 2 else x0 + col_w
+            col = self._drone_column(
+                drones[i] if i < len(drones) else None,
+                dsnaps.get(i), x1 - x0)
+            band[:, x0:x1] = col
             cv2.rectangle(band, (x0, 0), (x1 - 1, self._band_h - 1),
                           (90, 90, 90), 1)
         return band
+
+    def _drone_column(self, drone, dsnap, w):
+        """One cockpit column: camera tile on top, then telemetry + proximity
+        panel below. Robust to a missing/idle drone (placeholder camera)."""
+        col = np.full((self._band_h, w, 3), 30, dtype=np.uint8)
+        col[:self._cam_h] = self._drone_tile(drone, w, self._cam_h)
+        if self._panel_h:
+            col[self._cam_h:] = self._drone_panel(dsnap, w, self._panel_h)
+        return col
+
+    def _drone_panel(self, dsnap, w, h):
+        """Telemetry text (left) + car-style proximity graphic (right)."""
+        panel = np.full((h, w, 3), 22, dtype=np.uint8)
+        if dsnap is None:
+            return panel
+        prox_w = int(w * 0.32) if self._proximity else 0
+        if self._telemetry:
+            y = 16
+            for text, color in self._telemetry_lines(dsnap):
+                cv2.putText(panel, text, (6, y), cv2.FONT_HERSHEY_SIMPLEX,
+                            0.36, color, 1, cv2.LINE_AA)
+                y += 16
+        if self._proximity:
+            self._draw_proximity(panel, w - prox_w, 0, prox_w, h, dsnap)
+        return panel
+
+    def _telemetry_lines(self, d):
+        """The per-drone telemetry fields, as (text, color) rows."""
+        n, e = d["true"]["arena_ne_m"][:2]
+        est = d["estimate"]["takeoff_cm"]
+        drift = d["estimate"]["drift_error_m"] * 100.0
+        o = d["orientation_deg"]
+        course = d["course_deg"]
+        course_s = f"{course:.0f}" if course is not None else "--"
+        g = d["goal"]
+        if d["mode"] == "manual" and g and "stick" in g:
+            s = g["stick"]
+            cmd = (f"STK F{s['forward']:+.1f} R{s['right']:+.1f} "
+                   f"U{s['up']:+.1f} Y{s['rotate']:+.1f}")
+        elif g:
+            cmd = f"CMD {g['kind']}"
+        else:
+            cmd = "CMD idle"
+        batt_c = _GREEN if d["battery_pct"] > 25 else _AMBER
+        uwb_c = _GREEN if d["uwb_ok"] else _RED
+        return [
+            (f"d{d['index']} {'FLY' if d['flying'] else 'GND'}  "
+             f"batt {d['battery_pct']:.0f}%", batt_c),
+            (f"UWB n,e {n:5.2f},{e:5.2f} m", _GREY),
+            (f"EST cm {est[0]:5.0f},{est[1]:5.0f} (drift {drift:3.0f}cm)",
+             _GREY),
+            (f"spd {d['speed_mps']:.2f} m/s  hdg {o['yaw']:.0f}", _GREY),
+            (f"course {course_s}  cam {d['camera_pitch_deg']:.0f}", _GREY),
+            (f"ypr {o['yaw']:.0f}/{o['pitch']:.0f}/{o['roll']:.0f}", _GREY),
+            (cmd, _GREY),
+            ("UWB: OK" if d["uwb_ok"] else "UWB: NO FIX", uwb_c),
+        ]
+
+    def _draw_proximity(self, panel, x0, y0, w, h, d):
+        """Car-style parking-sensor graphic: a drone icon with the five
+        barrier directions (fwd/back/left/right + a down dot) lighting RED
+        when that boolean flag is set — mirrors get_obstacles() exactly."""
+        rays = d["sensors"]["rays"]
+        cx, cy = x0 + w // 2, y0 + h // 2
+        r = min(w, h) // 2 - 10
+        seg = max(6, r // 3)
+        cv2.circle(panel, (cx, cy), max(4, seg // 2), (200, 200, 200), 1)
+        for name, dx, dy in _PROX_DIRS:
+            lit = bool(rays.get(name, {}).get("blocked"))
+            px, py = cx + dx * r, cy + dy * r
+            cv2.rectangle(panel, (px - seg // 2, py - seg // 2),
+                          (px + seg // 2, py + seg // 2),
+                          _RED if lit else (70, 70, 70),
+                          -1 if lit else 1)
+        down_lit = bool(rays.get("down", {}).get("blocked"))
+        cv2.circle(panel, (cx, cy), max(3, seg // 3),
+                   _RED if down_lit else (70, 70, 70), -1 if down_lit else 1)
+        cv2.putText(panel, "PROX", (x0 + 4, y0 + 12),
+                    cv2.FONT_HERSHEY_SIMPLEX, 0.32, _GREY, 1, cv2.LINE_AA)
 
     def _drone_tile(self, drone, w, h):
         """One inset: the drone's annotated live frame, or a placeholder when

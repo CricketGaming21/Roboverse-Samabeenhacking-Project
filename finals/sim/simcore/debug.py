@@ -121,12 +121,25 @@ class DebugProbe:
         est = drone.telemetry_position()
         ori = drone.telemetry_orientation()
         rule = drone.avoidance_rule
+        vel = getattr(drone, "vel", None)
+        speed = float(np.linalg.norm(vel[:2])) if vel is not None else 0.0
+        # course = direction of horizontal travel (None when ~stationary)
+        course = (round(math.degrees(math.atan2(vel[1], vel[0])) % 360.0, 1)
+                  if vel is not None and speed > 0.05 else None)
+        # UWB-OK: a fix is expected when the drone's tag is mapped and UWB is
+        # not fully dropping out (observer indicator; sim UWB = truth+noise).
+        uwb_ok = (drone.spec.uwb_tag_id is not None
+                  and self._cfg.uwb.dropout_prob < 1.0)
         return {
             "index": drone.index,
             "ip": drone.spec.ip,
             "connected": drone.connected,
             "flying": drone.flying,
             "battery_pct": round(float(drone.battery_pct), 2),
+            "speed_mps": round(speed, 3),
+            "course_deg": course,
+            "uwb_ok": bool(uwb_ok),
+            "uwb_tag_id": drone.spec.uwb_tag_id,
             "camera_pitch_deg": drone.camera_pitch_deg,
             "barrier_mode": drone.barrier_mode,
             "avoidance_rule": None if rule is None else {

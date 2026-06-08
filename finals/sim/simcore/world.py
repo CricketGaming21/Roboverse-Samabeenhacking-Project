@@ -197,9 +197,14 @@ def build(client: int, cfg, layout) -> WorldBodies:
     floor = _make_box(client, cfg, L / 2, W / 2, -_FLOOR_HALF_H,
                       L / 2 + t, W / 2 + t, _FLOOR_HALF_H, _RGBA["floor"])
 
+    # Walls render semi-transparent (alpha from config) so the third-person
+    # recording sees objects behind them — collision/geometry are UNCHANGED
+    # (the collision box is opaque to physics + the barrier ray-casts).
+    wr, wg, wb, _ = _RGBA["wall"]
+    wall_rgba = (wr, wg, wb, float(cfg.arena.wall_alpha))
     walls = tuple(
         _make_box(client, cfg, w.north, w.east, w.half_h,
-                  w.half_n, w.half_e, w.half_h, _RGBA["wall"])
+                  w.half_n, w.half_e, w.half_h, wall_rgba)
         for w in layout.walls)
 
     obstacles = tuple(

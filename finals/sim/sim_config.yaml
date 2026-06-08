@@ -35,6 +35,8 @@ arena:
   width_m: 6.0             # extent along EAST  (y)
   height_m: 3.0            # ceiling
   wall_thickness_m: 0.1
+  wall_alpha: 0.35         # wall RENDER transparency only (collision/geometry
+                           # unchanged) — the 3D recording sees objects behind
   origin: [0.0, 0.0, 0.0]  # where the arena/UWB origin sits in pybullet world
   yaw_deg: 0.0             # arena->world rotation (0 = aligned)
   # --- authored layout (layout: authored) — APPROXIMATE coords, adjust freely.
@@ -252,6 +254,8 @@ record:
   camera_angle_deg: 45.0   # elevation above horizontal
   fov_deg: 60.0            # vertical FOV, framing the whole arena
   show_camera_insets: true # composite per-drone feeds into the frame (Phase 23)
+  show_telemetry: true     # per-drone telemetry panel below its feed (Phase 25)
+  show_proximity: true     # per-drone car-style boolean proximity graphic
 
 # --- Logging -----------------------------------------------------------------
 logging:

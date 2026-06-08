@@ -105,6 +105,9 @@ class ArenaConfig:
     width_m: float = 6.0              # extent along EAST  (y)
     height_m: float = 3.0
     wall_thickness_m: float = 0.1
+    wall_alpha: float = 0.35          # wall RENDER transparency (collision
+                                      # unchanged) so the 3D recording sees
+                                      # objects behind the walls
     origin: list = field(default_factory=lambda: [0.0, 0.0, 0.0])
     yaw_deg: float = 0.0
     authored: AuthoredConfig = field(default_factory=AuthoredConfig)
@@ -375,6 +378,8 @@ class RecordConfig:
     camera_angle_deg: float = 45.0    # elevation above horizontal
     fov_deg: float = 60.0             # framing the whole arena
     show_camera_insets: bool = True   # per-drone feeds (Phase 23)
+    show_telemetry: bool = True       # per-drone telemetry panel (Phase 25)
+    show_proximity: bool = True       # per-drone car-style proximity graphic
 
 
 @dataclass
