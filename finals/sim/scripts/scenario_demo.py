@@ -221,11 +221,12 @@ def _direct(cfg, reg, done_evt, errors):
 
 
 def run_scenario_demo(cfg, verbose=False, gui=False, live=False, debug=False,
-                      dump_path=None, topdown_png=None) -> dict:
+                      dump_path=None, topdown_png=None, dashboard=False) -> dict:
     """Run the whole canned scenario; returns both scores + run telemetry."""
     reg = get_registry(cfg, gui=gui)
     view = TopDownView(reg)
     stop_debug = None
+    dash = None
     cams = []
     rover_samples = []
     drone_samples = []
@@ -239,6 +240,10 @@ def run_scenario_demo(cfg, verbose=False, gui=False, live=False, debug=False,
             from scripts.run_sim import open_camera_windows
             from simcore.log import get_logger
             cams = open_camera_windows(cfg, get_logger("demo", cfg))
+        if dashboard:
+            from scripts.dashboard import CommandDashboard
+            dash = CommandDashboard(reg)
+            dash.start()
         view.start_sampling()
         threading.Thread(target=_track_world,
                          args=(reg, rover_samples, drone_samples, done_evt),
@@ -280,6 +285,8 @@ def run_scenario_demo(cfg, verbose=False, gui=False, live=False, debug=False,
                   f"final phase: {result['final_phase']}")
         return result
     finally:
+        if dash:
+            dash.stop()
         if cams:
             from scripts.run_sim import close_camera_windows
             close_camera_windows(cams)
@@ -305,6 +312,8 @@ def main(argv=None) -> None:
                     help="append per-tick JSON snapshots to PATH")
     ap.add_argument("--topdown", metavar="PNG", default=None,
                     help="save the final top-down view")
+    ap.add_argument("--dashboard", action="store_true",
+                    help="live read-only per-drone command/telemetry console")
     args = ap.parse_args(argv)
 
     cfg = load_config()
@@ -313,7 +322,8 @@ def main(argv=None) -> None:
 
     result = run_scenario_demo(cfg, verbose=True, gui=args.gui,
                                live=args.live, debug=args.debug,
-                               dump_path=args.dump, topdown_png=args.topdown)
+                               dump_path=args.dump, topdown_png=args.topdown,
+                               dashboard=args.dashboard)
     ok = result["landing_score"] >= 1 and result["snapshot_score"] >= 1
     print("SCENARIO DEMO COMPLETE" if ok else
           f"SCENARIO DEMO INCOMPLETE (landings={result['landing_score']}, "

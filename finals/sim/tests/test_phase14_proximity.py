@@ -1,8 +1,10 @@
-"""Phase 14 acceptance test — car-sensor obstacle-proximity view (headless).
+"""Phase 14 acceptance test — observer-only obstacle proximity (headless).
 
-The proximity values are OBSERVER-ONLY ground truth from the barrier rays
-(sensors.barrier_distances / DebugProbe). The public pyhulax surface still
-returns only the five blocked/clear booleans — pinned here.
+The proximity DISTANCES are OBSERVER-ONLY ground truth from the barrier rays
+(sensors.barrier_distances / DebugProbe), kept for the read-only dashboard.
+The public pyhulax surface still returns only the five blocked/clear
+booleans — pinned here. (Phase 20 simplified the VIZ overlay itself to
+boolean directional indicators; that is covered in test_phase20_dashboard.)
 """
 
 import dataclasses
@@ -18,7 +20,7 @@ from simcore import frames, sensors
 from simcore.config import load_config
 from simcore.debug import DebugProbe
 from simcore.registry import get_registry, shutdown_registry
-from simcore.viz import TopDownView, proximity_band
+from simcore.viz import TopDownView
 
 
 @pytest.fixture()
@@ -60,10 +62,10 @@ def _distances(reg, index=0):
 
 
 # --------------------------------------------------------------------------- #
-# Distances + bands from the actual rays
+# Observer-only distances from the actual rays (dashboard / DebugProbe)
 # --------------------------------------------------------------------------- #
 
-def test_forward_distance_band_and_approach(sim, cfg):
+def test_forward_distance_and_approach(sim, cfg):
     # Box south face at north = 2.4; drone 0 flies north along east = 1.1.
     # Forward trigger ray: starts 0.10 m ahead of centre, ends at 0.6 m.
     _spawn_box(sim, north=2.6, east=1.1)
@@ -76,30 +78,20 @@ def test_forward_distance_band_and_approach(sim, cfg):
     fwd = prox["forward"]
     assert fwd["range_m"] == pytest.approx(0.5, abs=1e-6)   # 0.6 - 0.1 offset
     assert fwd["distance_m"] == pytest.approx(0.40, abs=0.03)  # ray-true
-    assert proximity_band(fwd["distance_m"], fwd["range_m"]) == "amber"
-    # clear directions read green
+    # clear directions report no hit
     for name in ("back", "left", "right", "down"):
         assert prox[name]["distance_m"] is None
-        assert proximity_band(None, prox[name]["range_m"]) == "green"
 
     d.move_to(0, 156, 100)              # n=2.16: face gap 0.24 m -> closing in
     fwd2 = _distances(sim)["forward"]
     assert fwd2["distance_m"] == pytest.approx(0.14, abs=0.03)
     assert fwd2["distance_m"] < fwd["distance_m"]            # updates live
-    assert proximity_band(fwd2["distance_m"], fwd2["range_m"]) == "red"
 
     # the value really is the ray's: cross-check against the probe's ray data
     ray = DebugProbe(sim).snapshot(referee_view=False)["drones"][0][
         "sensors"]["rays"]["forward"]
     assert ray["distance_m"] == pytest.approx(fwd2["distance_m"], abs=0.02)
     assert ray["hit_pos"] is not None
-
-
-def test_band_thresholds():
-    assert proximity_band(None, 0.5) == "green"
-    assert proximity_band(0.40, 0.5) == "amber"   # outer 55% of the ray
-    assert proximity_band(0.20, 0.5) == "red"     # closest 45%
-    assert proximity_band(0.05, 0.5) == "red"
 
 
 # --------------------------------------------------------------------------- #
@@ -129,21 +121,24 @@ def test_public_api_still_booleans_only(sim, cfg):
 
 
 # --------------------------------------------------------------------------- #
-# Overlay renders headless
+# Boolean overlay renders headless (Phase 20 simplified shape)
 # --------------------------------------------------------------------------- #
 
-def test_headless_png_with_proximity_overlay(sim, cfg, tmp_path):
+def test_headless_png_with_boolean_proximity_overlay(sim, cfg, tmp_path):
     assert cfg.viz.show_proximity is True
     _spawn_box(sim, north=2.0, east=1.1)
     d = DroneAPI()
     d.connect(cfg.drones.units[0].ip)
     d.takeoff(100)
-    d.move_to(0, 90, 100)                  # n=1.5: face gap 0.3 -> red band
+    d.move_to(0, 90, 100)                  # n=1.5: face gap 0.3 -> forward set
     view = TopDownView(sim)
     view.sample()
     prox = view._latest[0][7]
     assert prox is not None
-    assert prox["forward"]["distance_m"] == pytest.approx(0.20, abs=0.03)
+    # the overlay sample is now BOOLEAN directional — no distance/angle
+    assert set(prox) == {"forward", "back", "left", "right", "down"}
+    assert all(isinstance(v, bool) for v in prox.values())
+    assert prox["forward"] is True
     out = tmp_path / "prox.png"
     view.render_png(str(out))
     assert out.is_file() and out.stat().st_size > 10_000

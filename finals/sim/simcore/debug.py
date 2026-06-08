@@ -55,7 +55,7 @@ class DebugProbe:
         g = drone.goal
         if g is None:
             return None
-        return {
+        d = {
             "kind": g.kind,
             "target_world": _round3(g.target_pos) if g.target_pos is not None
             else None,
@@ -65,6 +65,18 @@ class DebugProbe:
             "end_time": g.end_time,
             "deadline": round(g.deadline, 2),
         }
+        if g.target_pos is not None:
+            d["remaining_m"] = round(
+                float(np.linalg.norm(g.target_pos - drone.pos)), 3)
+        if g.kind == "manual":
+            # live send_manual_control stick inputs (fwd, right, up, rotate)
+            d["stick"] = {
+                "forward": round(float(drone.manual_stick[0]), 3),
+                "right": round(float(drone.manual_stick[1]), 3),
+                "up": round(float(drone.manual_stick[2]), 3),
+                "rotate": round(float(drone.manual_stick[3]), 3),
+            }
+        return d
 
     def _sensor_dict(self, drone):
         """The 5 barrier rays (endpoints + hit) and ToF altitude — built from
@@ -138,6 +150,9 @@ class DebugProbe:
             "orientation_deg": {"yaw": round(ori.yaw, 2),
                                 "pitch": ori.pitch, "roll": ori.roll},
             "goal": self._goal_dict(drone),
+            "mode": ("manual" if drone.goal is not None
+                     and drone.goal.kind == "manual"
+                     else "blocking" if drone.goal is not None else "idle"),
             "executing": drone.goal is not None,
             "blocked": self._blocked(drone),
             "sensors": self._sensor_dict(drone),

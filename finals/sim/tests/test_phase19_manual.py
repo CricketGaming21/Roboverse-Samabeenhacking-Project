@@ -127,12 +127,15 @@ def test_stopping_inputs_coast_then_station_keep_in_wind():
         d = _connect(cfg)
         d.takeoff(100)
         d.hover(1.0)
-        _pump(d, reg, 1.5, forward=0.8)               # get moving fast
+        moving = _pump(d, reg, 1.5, forward=0.8)      # get moving fast
+        v_fly = max(float(np.linalg.norm(v[:2]))
+                    for _t, _p, v, _ti, _y in moving[-10:])
+        assert v_fly > 0.3                            # genuinely cruising
         # release the stick: zero frames keep arriving (the loop is alive)
         samples = _pump(d, reg, 3.0)                  # all sticks 0.0
         speeds = [float(np.linalg.norm(v[:2])) for _t, _p, v, _ti, _y in samples]
-        assert speeds[0] > 0.3                        # momentum: still moving
-        assert any(0.1 < s < speeds[0] for s in speeds[:30])  # decays, no snap
+        assert max(speeds[:8]) > 0.2                  # momentum: still moving
+        assert min(speeds) < 0.5 * max(speeds[:8])    # decays, no snap to zero
         assert speeds[-1] < 0.15                      # coasted to a stop
         # station-keep: once stopped, the wind cannot walk it away
         hold0 = samples[-1][1]

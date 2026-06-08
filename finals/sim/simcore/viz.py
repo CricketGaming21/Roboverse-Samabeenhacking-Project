@@ -19,9 +19,9 @@ from matplotlib.backends.backend_agg import FigureCanvasAgg
 from matplotlib.figure import Figure
 from matplotlib.patches import Circle
 from matplotlib.patches import Polygon as MplPolygon
-from matplotlib.patches import Rectangle, Wedge
+from matplotlib.patches import Rectangle
 
-from . import frames, sensors
+from . import frames
 from .log import get_logger
 
 _CELL_M = 0.25          # coverage grid pitch
@@ -30,19 +30,15 @@ _DRONE_COLORS = ("tab:blue", "tab:orange", "tab:purple")
 _FOV_VIZ_RANGE_M = 8.0  # cap forward-looking footprints so the map stays readable
 _GUI_LINE_COLORS = ((0.1, 0.3, 0.9), (1.0, 0.5, 0.1), (0.6, 0.2, 0.8))
 
-# Car-sensor proximity bands (observer-only ground truth; pyhulax still
-# returns only booleans). A hit in the closest 45% of the ray reads red.
-_RED_FRACTION = 0.45
-_BAND_COLORS = {"green": "limegreen", "amber": "orange", "red": "red"}
-_PROX_LABELS = (("forward", "FWD", 0.0), ("left", "LFT", 90.0),
-                ("back", "BCK", 180.0), ("right", "RGT", -90.0))
-
-
-def proximity_band(distance_m, range_m) -> str:
-    """green (clear) -> amber (detected) -> red (close), like a car sensor."""
-    if distance_m is None:
-        return "green"
-    return "red" if distance_m <= _RED_FRACTION * range_m else "amber"
+# Boolean directional proximity indicators (Phase 20): one marker per barrier
+# direction that lights up when that flag is set — NO wedge, NO angle, NO
+# distance. It mirrors exactly the five booleans get_obstacles() returns;
+# the numeric distances live only in the read-only dashboard / DebugProbe.
+# body-direction offsets (forward, body-left, body-right, body-back).
+_PROX_DIRS = (("forward", "FWD", 1.0, 0.0), ("back", "BCK", -1.0, 0.0),
+              ("left", "LFT", 0.0, 1.0), ("right", "RGT", 0.0, -1.0))
+_PROX_LIT = "red"
+_PROX_CLEAR = "lightgray"
 
 # GUI backends tried (in order) for the live window only. The headless/PNG
 # path never touches the global backend: render_png draws straight onto its
@@ -129,8 +125,12 @@ class TopDownView:
                         self._draw_gui_frustum(i, d, corners_w)
                 prox = None
                 if self._show_prox and d.flying:
-                    # OBSERVER-ONLY ray distances (never via pyhulax)
-                    prox = sensors.barrier_distances(reg.client, cfg, d)
+                    # The five barrier BOOLEANS (exactly get_obstacles()) —
+                    # no distance, no angle. Observer reads simcore directly.
+                    ob = d.sense_obstacles()
+                    prox = {"forward": ob.forward, "back": ob.back,
+                            "left": ob.left, "right": ob.right,
+                            "down": ob.down}
                     if reg.gui:
                         self._draw_gui_proximity(i, d, prox)
                 ds.append((n, e, n2 - n, e2 - e, d.flying, float(d.pos[2]),
@@ -180,47 +180,43 @@ class TopDownView:
         if self._thread is not None:
             self._thread.join(timeout=2)
 
-    def _draw_proximity(self, ax, n, e, dn, de, prox) -> None:
-        """Parking-sensor wedges around the drone icon: forward/back/left/
-        right segments + a down dot, coloured by TRUE ray proximity."""
-        nose_deg = math.degrees(math.atan2(dn, de))  # plot angle of the nose
-        for name, label, offset in _PROX_LABELS:
-            info = prox[name]
-            band = proximity_band(info["distance_m"], info["range_m"])
-            ang = nose_deg + offset
-            ax.add_patch(Wedge((e, n), 0.55, ang - 28, ang + 28, width=0.16,
-                               fc=_BAND_COLORS[band], ec="none",
-                               alpha=0.9 if band != "green" else 0.35,
-                               zorder=5))
-            if band != "green":
-                lx = e + 0.85 * math.cos(math.radians(ang))
-                ly = n + 0.85 * math.sin(math.radians(ang))
-                ax.annotate(f"{label} {info['distance_m']:.1f} m", (lx, ly),
-                            ha="center", fontsize=7,
-                            color=_BAND_COLORS[band], zorder=7)
-        down = prox["down"]
-        band = proximity_band(down["distance_m"], down["range_m"])
-        ax.add_patch(Circle((e, n), 0.10, fc=_BAND_COLORS[band], ec="none",
-                            alpha=0.8 if band != "green" else 0.3, zorder=5))
-        if band != "green":
-            ax.annotate(f"DN {down['distance_m']:.1f} m", (e + 0.2, n - 0.3),
-                        fontsize=7, color=_BAND_COLORS[band], zorder=7)
+    def _draw_proximity(self, ax, n, e, dn, de, flags) -> None:
+        """Plain BOOLEAN directional indicators: a small marker in each body
+        direction (forward/back/left/right) + a down dot, lit when that
+        barrier flag is set. No wedge, no angle, no distance — mirrors the
+        five booleans get_obstacles() returns."""
+        # nose direction in the plot (x=east, y=north); body-left is the +90°
+        # CCW rotation of the nose in plot space.
+        mag = math.hypot(dn, de) or 1.0
+        fx, fy = de / mag, dn / mag            # nose: (east, north)
+        lx, ly = -fy, fx                       # body-left in plot space
+        off = 0.45
+        for name, label, bx, by in _PROX_DIRS:
+            px = bx * fx + by * lx
+            py = bx * fy + by * ly
+            lit = bool(flags.get(name))
+            ax.plot(e + px * off, n + py * off, marker="s", ms=8,
+                    color=_PROX_LIT if lit else _PROX_CLEAR,
+                    alpha=1.0 if lit else 0.4, zorder=6)
+            if lit:
+                ax.annotate(label, (e + px * off * 1.7, n + py * off * 1.7),
+                            ha="center", va="center", fontsize=6,
+                            color=_PROX_LIT, zorder=7)
+        down_lit = bool(flags.get("down"))
+        ax.add_patch(Circle((e, n), 0.09, fc=_PROX_LIT if down_lit
+                            else _PROX_CLEAR,
+                            alpha=0.9 if down_lit else 0.3, ec="none",
+                            zorder=5))
 
-    def _draw_gui_proximity(self, idx, drone, prox) -> None:
-        """Compact HUD text above the drone in --gui. SIM THREAD ONLY."""
+    def _draw_gui_proximity(self, idx, drone, flags) -> None:
+        """Compact boolean barrier HUD above the drone in --gui (●=set,
+        ·=clear). SIM THREAD ONLY."""
         import pybullet as p
-        parts, worst = [], "green"
-        rank = {"green": 0, "amber": 1, "red": 2}
-        for key, letter in (("forward", "F"), ("back", "B"), ("left", "L"),
-                            ("right", "R"), ("down", "D")):
-            d_m = prox[key]["distance_m"]
-            parts.append(f"{letter}{d_m:.2f}" if d_m is not None
-                         else f"{letter}-")
-            band = proximity_band(d_m, prox[key]["range_m"])
-            if rank[band] > rank[worst]:
-                worst = band
-        color = {"green": (0.1, 0.7, 0.1), "amber": (1.0, 0.6, 0.0),
-                 "red": (1.0, 0.1, 0.1)}[worst]
+        parts = [f"{ltr}{'●' if flags.get(key) else '·'}" for key, ltr in
+                 (("forward", "F"), ("back", "B"), ("left", "L"),
+                  ("right", "R"), ("down", "D"))]
+        any_lit = any(flags.values())
+        color = (1.0, 0.1, 0.1) if any_lit else (0.1, 0.7, 0.1)
         pos = [drone.pos[0], drone.pos[1], drone.pos[2] + 0.25]
         kwargs = dict(textColorRGB=list(color), textSize=1.1,
                       lifeTime=0, physicsClientId=self._reg.client)

@@ -71,6 +71,8 @@ def main(argv=None) -> None:
                     help="print a read-only world snapshot once per sim second")
     ap.add_argument("--dump", metavar="PATH", default=None,
                     help="append per-tick JSON snapshots (JSON Lines) to PATH")
+    ap.add_argument("--dashboard", action="store_true",
+                    help="live read-only per-drone command/telemetry console")
     args = ap.parse_args(argv)
 
     cfg = load_config(args.config)
@@ -78,6 +80,7 @@ def main(argv=None) -> None:
     reg = SimRegistry(cfg, gui=args.gui)
     view = TopDownView(reg)
     stop_debug = None
+    dash = None
     cams = []
     try:
         b = reg.bodies
@@ -93,6 +96,10 @@ def main(argv=None) -> None:
         if args.debug or args.dump:
             stop_debug = start_debug_loop(reg, print_text=args.debug,
                                           dump_path=args.dump)
+        if args.dashboard:
+            from scripts.dashboard import CommandDashboard
+            dash = CommandDashboard(reg)
+            dash.start()
         if cfg.viz.show_camera_windows:
             cams = open_camera_windows(cfg, log)
         view.start_sampling()
@@ -115,6 +122,8 @@ def main(argv=None) -> None:
         print(format_combined_scoreboard(reg))
         print(reg.monitor.format_report())
     finally:
+        if dash:
+            dash.stop()
         close_camera_windows(cams)
         if stop_debug:
             stop_debug()
