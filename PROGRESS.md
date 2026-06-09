@@ -4,8 +4,9 @@
 
 | Phase | Status | Tests (gate / full) | Commit | Notes |
 |------|--------|---------------------|--------|-------|
-| P0   | ✅ GREEN | 41 / 41            | (this) | fake SDK substrate |
-| P1   | TODO   | – / –               | –      | not started |
+| P0   | ✅ GREEN | 41 / 41            | 54444c9 | fake SDK substrate |
+| P1   | ✅ GREEN | 26 / 67            | (this) | config + frames + fly_to_uwb |
+| P2   | TODO   | – / –               | –      | not started |
 
 ## Reference-source note (read once)
 The authoritative `reference/pyhulax_knowledge_base.txt` and `reference/brief/Finals_brief.pdf`
@@ -19,6 +20,19 @@ real sim and the KB) and the vendored `provided_code/` (`UWBParserThread.py`, `d
 signatures — the fake encodes the doc's values.
 
 ## Log
+
+### P1 — Config + frames + UWB control loop  ✅
+Built `src/mission/config.py` (pydantic, every section `extra="forbid"` → unknown keys raise;
+a validator enforces `speed.max_mps ∈ (0, 0.5]` as the HARD cap), `src/mission/frames.py`
+(`arena_to_body`/`body_to_arena` as exact-inverse rotations, `m_to_cm`/`cm_to_m`, `clamp_speed`),
+`src/mission/runtime/sdk_compat.py` (`prepare_manual_control`/`release` route real-only calls
+through `hasattr` — no-op on the sim fake, real on `RealLikeFakeDroneAPI`), and
+`src/mission/control/uwb_loop.py::fly_to_uwb` (P control on UWB arena error → body sticks, hard
+clamp ≤0.5 m/s, ToF altitude hold, **hold-on-dropout**, UWB-derived arrival speed Δpos/Δt). The
+loop is deterministic in tests via an injectable `sleep` (no real waits) and the time-stepped
+fake. Converges from 5 start/target poses incl. corner-to-corner and under 3 cm UWB noise; a
+test proves per-step speed never exceeds 0.5 m/s and another proves a horizontal freeze on UWB
+dropout. Frame transforms are inverse-consistent and match hand-worked yaw-0 / yaw-90 cases.
 
 ### P0 — Test substrate (fake SDK)  ✅
 Built `tests/fakes/fake_pyhulax.py`, `tests/fakes/fake_uwb.py`, `tests/conftest.py`,
