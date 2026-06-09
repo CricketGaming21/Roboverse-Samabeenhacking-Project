@@ -1,0 +1,11 @@
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+.pytest_cache/
+.mypy_cache/
+*.egg-info/
+logs/*.log
+logs/scans/
+.DS_Store
+BLOCKED.md.bak
