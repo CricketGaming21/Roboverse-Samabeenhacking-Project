@@ -6,8 +6,9 @@
 |------|--------|---------------------|--------|-------|
 | P0   | ✅ GREEN | 41 / 41            | 54444c9 | fake SDK substrate |
 | P1   | ✅ GREEN | 26 / 67            | 6b12d91 | config + frames + fly_to_uwb |
-| P2   | ✅ GREEN | 19 / 86            | (this) | planner geometry + projection |
-| P3   | TODO   | – / –               | –      | not started |
+| P2   | ✅ GREEN | 19 / 86            | d29f1ec | planner geometry + projection |
+| P3   | ✅ GREEN | 13 / 99            | (this) | reactive avoidance guard |
+| P4   | TODO   | – / –               | –      | not started |
 
 ## Reference-source note (read once)
 The authoritative `reference/pyhulax_knowledge_base.txt` and `reference/brief/Finals_brief.pdf`
@@ -21,6 +22,18 @@ real sim and the KB) and the vendored `provided_code/` (`UWBParserThread.py`, `d
 signatures — the fake encodes the doc's values.
 
 ## Log
+
+### P3 — Reactive avoidance guard + plan-then-guard  ✅
+Built `src/mission/control/avoidance.py`: `ReactiveGuard.filter(cmd_fwd, cmd_right, obstacles, *,
+open_side_hint=None) -> (fwd, right, up)` with `up` hard-wired to **0.0** (never climbs — HARD
+invariant #3), stops the blocked travel axis, slides toward the open lateral side with
+anti-oscillation **commit hysteresis**, and reports `boxed()` when surrounded. `separation(my_xy,
+others, my_priority, sep_m)` implements right-of-way (lower priority yields). Wired into
+`fly_to_uwb` via `guard=`, passing a goal-aware `open_side_hint` (sign of the body-right velocity)
+so the slide naturally heads toward the goal. An exhaustive test sweeps all 2^5 obstacle combos ×
+command grid asserting `up == 0`; the integration test flies a guarded drone past a *surprise*
+crate (unknown to the planner) and proves it reaches the goal, never enters the footprint interior,
+and never commands +up.
 
 ### P2 — Crate map + planner geometry + projection  ✅
 Built `src/mission/planner/arena.py` (loads `config/arena_truth.yaml` with `yaml.safe_load`,

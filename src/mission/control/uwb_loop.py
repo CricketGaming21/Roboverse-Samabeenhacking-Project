@@ -93,7 +93,9 @@ def fly_to_uwb(drone, uwb, tag_id: int, target_xy_m: Tuple[float, float], *,
 
         if guard is not None:
             obstacles = drone.get_obstacles()
-            fwd, right, gup = guard.filter(fwd, right, obstacles)
+            # hint the guard to slide toward the goal's side (general & robust)
+            hint = "right" if v_right > 1e-6 else "left" if v_right < -1e-6 else None
+            fwd, right, gup = guard.filter(fwd, right, obstacles, open_side_hint=hint)
             # the guard NEVER climbs; altitude hold owns +up.
             up_stick = min(up_stick, 0.0) if gup < 0 else up_stick
 
