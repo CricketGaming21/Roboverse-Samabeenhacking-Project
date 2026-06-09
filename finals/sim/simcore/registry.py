@@ -37,9 +37,15 @@ class SimRegistry:
     Constructing one boots the world (on the sim thread) and starts stepping.
     """
 
-    def __init__(self, config: SimConfig = None, gui: bool = False) -> None:
+    def __init__(self, config: SimConfig = None, gui: bool = False,
+                 cameras_enabled: bool = True) -> None:
         self.config = config if config is not None else load_config()
         self.gui = bool(gui)         # fixed at boot: p.GUI window vs DIRECT
+        # cameras_enabled=False is the FREEZE-PROOF live-3D mode: NO
+        # getCameraImage anywhere (no referee scanning, no render_camera, no
+        # render_arena) so a p.GUI window can never deadlock against an
+        # offscreen render. The 3D world still renders in the GUI itself.
+        self.cameras_enabled = bool(cameras_enabled)
         self._log = get_logger("registry", self.config)
         self.clock = SimClock()
         self.client = None           # pybullet client id (set on sim thread)
@@ -65,9 +71,13 @@ class SimRegistry:
                                f"{_BOOT_TIMEOUT_S}s")
         if self._boot_error is not None:
             raise self._boot_error
-        if self.config.scoring.enabled:
+        # The referee renders + scans camera frames; it MUST NOT run in the
+        # cameras-disabled live-3D mode (that is the whole freeze-proof point).
+        if self.config.scoring.enabled and self.cameras_enabled:
             self.referee = scoring.Referee(self)
             self.referee.start()
+        elif self.config.scoring.enabled:
+            self._log.info("cameras disabled (live-3D): referee/scanning OFF")
 
     # ------------------------------------------------------------------ #
     # Cross-thread access
@@ -114,7 +124,11 @@ class SimRegistry:
 
     def render_camera(self, drone):
         """One (H, W, 3) uint8 RGB frame from a drone's tiltable camera,
-        rendered on the sim thread with the active renderer (EGL or Tiny)."""
+        rendered on the sim thread with the active renderer (EGL or Tiny).
+        Returns None when cameras are disabled (live-3D mode) — no
+        getCameraImage, so it cannot freeze a p.GUI window."""
+        if not self.cameras_enabled:
+            return None
         return self.run_on_sim_thread(
             lambda: camera.render_rgb(self.client, self.config, drone,
                                       self.renderer),
@@ -125,7 +139,10 @@ class SimRegistry:
         third-person view framing the WHOLE arena — offscreen, on the sim
         thread, through the guarded renderer (EGL headless; never p.GUI).
         Passive observer for the recorder; renders the live world, no
-        re-sim. Returns None if the sim has shut down."""
+        re-sim. Returns None if the sim has shut down or cameras are disabled
+        (live-3D mode — no getCameraImage, so it cannot freeze a p.GUI)."""
+        if not self.cameras_enabled:
+            return None
         import math
 
         import numpy as np
@@ -429,16 +446,19 @@ _registry = None
 _registry_lock = threading.Lock()
 
 
-def get_registry(config: SimConfig = None, gui: bool = False) -> SimRegistry:
+def get_registry(config: SimConfig = None, gui: bool = False,
+                 cameras_enabled: bool = True) -> SimRegistry:
     """Return the shared world, creating it from config on first use.
 
-    gui only applies at creation time (the connection mode is fixed at
-    p.connect); it is ignored when the world already exists.
+    gui / cameras_enabled only apply at creation time (the connection mode is
+    fixed at p.connect; cameras_enabled=False is the freeze-proof live-3D
+    mode); they are ignored when the world already exists.
     """
     global _registry
     with _registry_lock:
         if _registry is None:
-            _registry = SimRegistry(config, gui=gui)
+            _registry = SimRegistry(config, gui=gui,
+                                    cameras_enabled=cameras_enabled)
         return _registry
 
 

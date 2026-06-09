@@ -159,6 +159,22 @@ rovers.
   interactive window (orbit/pan/zoom via WSLg) showing wall/obstacle
   heights, drones at altitude, rovers. Headless DIRECT+EGL stays the
   default; `--gui` only changes the connection mode at boot.
+- **Offscreen MP4 cockpit** — `python -m scripts.scenario_demo --record
+  run.mp4`: the full FPV/camera review. A faithful recording of the real
+  headless run — angled-overhead 3D arena + per-drone camera feeds (with
+  ArUco DETECTED→ACQUIRED boxes), telemetry panels, car-style proximity,
+  scoreboard. Generated offscreen (EGL, no window), so it works over SSH.
+- **Live 3D-only viewer** — `python -m scripts.live_view --drone 0`: a
+  `p.GUI` window for **interactive flying** with **all camera rendering
+  disabled** (no referee scanning, no insets, no drone-camera renders), so
+  it **cannot** hit the WSLg `getCameraImage`-vs-GUI freeze. Fly with the
+  keyboard (`scripts/keyboardcontrol.py`: WASD move, R/F up/down, Q/E yaw,
+  arrows tilt the camera) via the real `send_manual_control`.
+
+> **Two modes by design.** The live 3D viewer shows the **3D world only, NOT
+> the FPV camera** — a live camera feed there reintroduces the freeze. For
+> camera / FPV / scan review use `--record` (offscreen, no window). Fly live
+> in `live_view`; review footage in the recording.
 
 `simcore/debug.py` (`DebugProbe`, plus `--debug` / `--dump file.jsonl` on
 both scripts) is a READ-ONLY sim-internal introspection tool for tests and
