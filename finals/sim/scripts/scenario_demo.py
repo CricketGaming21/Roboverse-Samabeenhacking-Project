@@ -235,7 +235,21 @@ def run_scenario_demo(cfg, verbose=False, gui=False, live=False, debug=False,
                       dump_path=None, topdown_png=None, dashboard=False,
                       record_path=None) -> dict:
     """Run the whole canned scenario; returns both scores + run telemetry."""
-    reg = get_registry(cfg, gui=gui)
+    from simcore.log import get_logger
+    log = get_logger("demo", cfg)
+    # --gui is the FREEZE-PROOF 3D-only view: cameras OFF (no getCameraImage),
+    # so it can never deadlock a p.GUI window on WSLg. The cost is that
+    # camera-dependent features are unavailable in this mode.
+    reg = get_registry(cfg, gui=gui, cameras_enabled=not gui)
+    if gui:
+        log.info("--gui: 3D-only freeze-proof view (cameras OFF) — Part-2 "
+                 "snapshot scoring, --record and camera windows are disabled "
+                 "in this mode; use headless --record / --dashboard for "
+                 "camera + scan review")
+        if record_path:
+            log.warning("--record ignored under --gui (cameras off); run "
+                        "headless to record the cockpit MP4")
+            record_path = None
     view = TopDownView(reg)
     stop_debug = None
     dash = None
@@ -249,14 +263,15 @@ def run_scenario_demo(cfg, verbose=False, gui=False, live=False, debug=False,
         if debug or dump_path:
             stop_debug = start_debug_loop(reg, print_text=debug,
                                           dump_path=dump_path)
-        if cfg.viz.show_camera_windows:
+        if cfg.viz.show_camera_windows and not gui:
             from scripts.run_sim import open_camera_windows
-            from simcore.log import get_logger
-            cams = open_camera_windows(cfg, get_logger("demo", cfg))
+            cams = open_camera_windows(cfg, log)
         if dashboard:
-            from scripts.dashboard import CommandDashboard
-            dash = CommandDashboard(reg)
-            dash.start()
+            from scripts.webdash import WebDashboard
+            dash = WebDashboard(reg).start()
+            log.info("web dashboard live at %s — open it from PC-B "
+                     "(direct tailscale ip or SSH-forwarded localhost)",
+                     dash.url)
         if record_path:
             from simcore.recorder import ArenaRecorder
             recorder = ArenaRecorder(reg, record_path)
@@ -325,7 +340,9 @@ def main(argv=None) -> None:
     ap.add_argument("--rtf", type=float, default=None,
                     help="override meta.real_time_factor for this run")
     ap.add_argument("--gui", action="store_true",
-                    help="PyBullet 3D window instead of headless DIRECT")
+                    help="freeze-proof 3D-only PyBullet window (cameras OFF; "
+                         "no Part-2 scoring/record — use --dashboard/--record "
+                         "for cameras)")
     ap.add_argument("--live", action="store_true",
                     help="watch on the live top-down view")
     ap.add_argument("--debug", action="store_true",
@@ -335,7 +352,8 @@ def main(argv=None) -> None:
     ap.add_argument("--topdown", metavar="PNG", default=None,
                     help="save the final top-down view")
     ap.add_argument("--dashboard", action="store_true",
-                    help="live read-only per-drone command/telemetry console")
+                    help="serve the graphical WEB dashboard over HTTP "
+                         "(browser on PC-B; SSH-friendly, offscreen, no GUI)")
     ap.add_argument("--record", metavar="PATH.mp4", default=None,
                     help="record an offscreen 3D MP4 of the real run "
                          "(headless EGL; no GUI window)")

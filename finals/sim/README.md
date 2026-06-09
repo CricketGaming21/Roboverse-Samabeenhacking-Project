@@ -146,7 +146,7 @@ consecutive frames. Score = distinct ids banked; the scoreboard records which
 drone banked each id and when (sim time). The same gate scores pads and
 rovers.
 
-## Watching the sim (three views) + debugging
+## Watching the sim (live + offscreen views) + debugging
 
 - **Top-down 2D** — `python -m scripts.run_sim --live` or
   `python -m scripts.smoke_test --live` (the canned flight scoring in real
@@ -155,10 +155,26 @@ rovers.
 - **Per-drone cameras** — set `viz.show_camera_windows: true` and run
   `run_sim`: one cv2 window per drone with the live frames detection sees
   (or attach `pyhulax.video.VideoDisplay` to any stream yourself).
-- **3D world** — add `--gui` to `run_sim`/`smoke_test`: PyBullet's
-  interactive window (orbit/pan/zoom via WSLg) showing wall/obstacle
-  heights, drones at altitude, rovers. Headless DIRECT+EGL stays the
-  default; `--gui` only changes the connection mode at boot.
+- **3D world (`--gui`, freeze-proof)** — add `--gui` to `run_sim`/`smoke_test`:
+  PyBullet's interactive window (orbit/pan/zoom via WSLg) showing wall/obstacle
+  heights, drones at altitude, rovers. `--gui` is the **3D-only safe view**:
+  it runs **cameras OFF** (no referee scanning, no insets, no drone-camera
+  renders) so it **cannot** hit the WSLg `getCameraImage`-vs-GUI freeze. The
+  cost is that camera features (`--record`, camera windows, Part-2 snapshot
+  scoring) are unavailable under `--gui` — use the headless `--record` /
+  `--dashboard` for those. Headless DIRECT+EGL stays the default.
+- **Web dashboard (`--dashboard`, the SSH-friendly monitor)** — `python -m
+  scripts.scenario_demo --dashboard` (or `run_sim --dashboard`): a small HTTP
+  server (default port `8080`, `dashboard.*` in config) serving a **live
+  graphical browser dashboard** — per drone: telemetry (speed, UWB pos + the
+  drifting estimate, heading, camera pitch, yaw/pitch/roll, command/sticks,
+  battery), a UWB-OK badge, a car-style 5-segment proximity widget, plus the
+  scoreboard/phase banner and (offscreen) arena + camera images. Freeze-proof
+  by construction: headless, reads `DebugProbe` only, renders via the same
+  offscreen EGL path as `--record` — no `p.GUI`. **Open it from PC-B** either
+  directly at `http://<tailscale-ip>:8080`, or over an SSH tunnel:
+  `ssh -L 8080:localhost:8080 drone@<host> -p 2222` then browse
+  `http://localhost:8080`.
 - **Offscreen MP4 cockpit** — `python -m scripts.scenario_demo --record
   run.mp4`: the full FPV/camera review. A faithful recording of the real
   headless run — angled-overhead 3D arena + per-drone camera feeds (with

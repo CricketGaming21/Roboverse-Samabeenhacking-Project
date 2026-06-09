@@ -262,6 +262,21 @@ record:
                            # detect/acquire boxes are crisp; --hq sets the
                            # whole frame to 1920x1080
 
+# --- Web dashboard (--dashboard) ---------------------------------------------
+# Graphical browser dashboard served over HTTP — the SSH-friendly monitor.
+# Freeze-proof BY CONSTRUCTION: headless, reads DebugProbe (never pyhulax),
+# renders arena/camera frames through the offscreen EGL path (NEVER p.GUI).
+# Off unless --dashboard. From PC-B: http://<tailscale-ip>:8080 directly, or
+# SSH-forward `ssh -L 8080:localhost:8080 drone@<host> -p 2222`.
+dashboard:
+  host: "0.0.0.0"          # bind addr; 0.0.0.0 = reachable over the network
+  port: 8080               # browse http://<host-ip>:8080 on PC-B
+  poll_hz: 4.0             # browser telemetry poll rate (JS hint)
+  image_refresh_hz: 2.0    # browser arena/camera image refresh rate (JS hint)
+  serve_images: true       # serve /api/arena.jpg + /api/camera/<i>.jpg (EGL)
+  jpeg_quality: 75         # JPEG quality of the served offscreen frames
+  min_render_period_s: 0.12  # server-side cap on offscreen render rate
+
 # --- Logging -----------------------------------------------------------------
 logging:
   level: INFO

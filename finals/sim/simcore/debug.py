@@ -199,6 +199,13 @@ class DebugProbe:
         ref = self._reg.referee
         cfg = self._cfg
         out = {"enabled": ref is not None}
+        # 3D-only / freeze-proof mode (cameras_enabled=False): NO getCameraImage
+        # anywhere, so skip the per-marker scan diagnostics (which render). The
+        # rest of the snapshot (telemetry/sensors) is unaffected — this keeps
+        # the web dashboard's /api/state working in --gui mode too.
+        if not self._reg.cameras_enabled:
+            out["per_drone"] = {}
+            return out
         banked = {}
         if ref is not None:
             out["mode"] = cfg.scoring.mode

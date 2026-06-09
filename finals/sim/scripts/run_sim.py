@@ -66,14 +66,16 @@ def main(argv=None) -> None:
     ap.add_argument("--live", action="store_true",
                     help="show the live top-down view (needs viz.enabled)")
     ap.add_argument("--gui", action="store_true",
-                    help="boot with PyBullet's interactive 3D window instead "
-                         "of headless DIRECT (orbit/pan/zoom)")
+                    help="freeze-proof 3D-only PyBullet window (cameras OFF; "
+                         "orbit/pan/zoom). --record / camera windows need "
+                         "headless; use --dashboard for camera review over SSH")
     ap.add_argument("--debug", action="store_true",
                     help="print a read-only world snapshot once per sim second")
     ap.add_argument("--dump", metavar="PATH", default=None,
                     help="append per-tick JSON snapshots (JSON Lines) to PATH")
     ap.add_argument("--dashboard", action="store_true",
-                    help="live read-only per-drone command/telemetry console")
+                    help="serve the graphical WEB dashboard over HTTP "
+                         "(browser on PC-B; SSH-friendly, offscreen, no GUI)")
     ap.add_argument("--record", metavar="PATH.mp4", default=None,
                     help="record an offscreen 3D MP4 of the run "
                          "(headless EGL; no GUI window)")
@@ -85,7 +87,17 @@ def main(argv=None) -> None:
     if args.hq:
         cfg.record.width, cfg.record.height = 1920, 1080
     log = get_logger("run_sim", cfg)
-    reg = SimRegistry(cfg, gui=args.gui)
+    # --gui is the freeze-proof 3D-only view: cameras OFF (no getCameraImage),
+    # so it can never deadlock a p.GUI window. Camera-dependent features
+    # (--record, camera windows) are unavailable in this mode.
+    reg = SimRegistry(cfg, gui=args.gui, cameras_enabled=not args.gui)
+    if args.gui:
+        log.info("--gui: 3D-only freeze-proof view (cameras OFF); "
+                 "--record / camera windows disabled here — use headless "
+                 "--record or --dashboard for camera review")
+        if args.record:
+            log.warning("--record ignored under --gui (cameras off)")
+            args.record = None
     view = TopDownView(reg)
     stop_debug = None
     dash = None
@@ -106,14 +118,16 @@ def main(argv=None) -> None:
             stop_debug = start_debug_loop(reg, print_text=args.debug,
                                           dump_path=args.dump)
         if args.dashboard:
-            from scripts.dashboard import CommandDashboard
-            dash = CommandDashboard(reg)
-            dash.start()
+            from scripts.webdash import WebDashboard
+            dash = WebDashboard(reg).start()
+            log.info("web dashboard live at %s — open it from PC-B "
+                     "(direct tailscale ip or SSH-forwarded localhost)",
+                     dash.url)
         if args.record:
             from simcore.recorder import ArenaRecorder
             recorder = ArenaRecorder(reg, args.record)
             recorder.start()
-        if cfg.viz.show_camera_windows:
+        if cfg.viz.show_camera_windows and not args.gui:
             cams = open_camera_windows(cfg, log)
         view.start_sampling()
         if args.live and cfg.viz.enabled:

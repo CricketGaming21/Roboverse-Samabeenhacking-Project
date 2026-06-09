@@ -388,6 +388,24 @@ class RecordConfig:
 
 
 @dataclass
+class DashboardConfig:
+    """Graphical WEB dashboard served over HTTP (--dashboard, now web-based).
+
+    Observer-only and freeze-proof BY CONSTRUCTION: a headless HTTP service
+    that reads DebugProbe (never pyhulax) and renders the arena/camera images
+    through the SAME offscreen EGL path the recorder uses — never p.GUI. Off
+    unless --dashboard is passed. Binds host:port so a browser on PC-B can
+    reach it directly (tailscale ip) or over an SSH tunnel."""
+    host: str = "0.0.0.0"             # 0.0.0.0 = reachable over the network
+    port: int = 8080                  # http://<host-ip>:8080 in PC-B's browser
+    poll_hz: float = 4.0              # browser /api/state poll rate (JS hint)
+    image_refresh_hz: float = 2.0     # browser arena/camera refresh rate (hint)
+    serve_images: bool = True         # serve /api/arena.jpg + /api/camera/<i>.jpg
+    jpeg_quality: int = 75            # JPEG quality for the served frames
+    min_render_period_s: float = 0.12  # server-side cap on offscreen renders
+
+
+@dataclass
 class LoggingConfig:
     level: str = "INFO"
     file: str = "logs/sim.log"
@@ -423,6 +441,7 @@ class SimConfig:
     viz: VizConfig = field(default_factory=VizConfig)
     monitor: MonitorConfig = field(default_factory=MonitorConfig)
     record: RecordConfig = field(default_factory=RecordConfig)
+    dashboard: DashboardConfig = field(default_factory=DashboardConfig)
     logging: LoggingConfig = field(default_factory=LoggingConfig)
 
 
