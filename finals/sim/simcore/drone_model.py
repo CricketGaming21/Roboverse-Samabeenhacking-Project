@@ -36,8 +36,19 @@ _TIMEOUT_MARGIN = 2.0
 _TIMEOUT_BASE_S = 5.0
 
 
+def level_mps(cfg, name: str) -> float:
+    """m/s for a horizontal velocity LEVEL name, CLAMPED to the HULA hard cap
+    (velocity_levels.max_mps, 0.5 m/s per the Finals brief). The raw band
+    values stay in config for reference; the HULA can never actually exceed
+    the cap, so ZOOM/TURBO clamp down to MEDIUM. Clamp lives here at the
+    mapping — the enum and public API are untouched."""
+    return min(float(getattr(cfg.velocity_levels, name)),
+               float(cfg.velocity_levels.max_mps))
+
+
 def speed_to_mps(cfg, speed) -> float:
-    """Map VelocityLevel (enum or raw int) -> m/s by NAME via config.
+    """Map VelocityLevel (enum or raw int) -> m/s by NAME via config, clamped
+    to the hard speed cap.
 
     The enum int is the firmware's P-gain divisor (SLOW=300 .. TURBO=50,
     lower = faster); only the NAME keys into config.velocity_levels.
@@ -48,7 +59,7 @@ def speed_to_mps(cfg, speed) -> float:
         raise PyhulaxError(
             f"invalid speed level {speed!r} — use VelocityLevel.SLOW/MEDIUM/"
             f"ZOOM/TURBO") from None
-    return float(getattr(cfg.velocity_levels, name))
+    return level_mps(cfg, name)
 
 
 def _mask_tripped(flags: Obstacles, mask: int) -> bool:
@@ -493,7 +504,7 @@ class SimDrone:
             if u < 0 and flags.down:
                 u = 0.0
         vdes = np.zeros(3)
-        cap_h = float(self.cfg.velocity_levels.TURBO)  # the 0.5-1.0 band cap
+        cap_h = level_mps(self.cfg, "TURBO")  # clamped to the 0.5 m/s hard cap
         if abs(f) > 1e-3 or abs(r) > 1e-3 or abs(u) > 1e-3:
             # Body-relative: +forward = nose, +right = body right (-y FLU).
             bx, by = f * cap_h, -r * cap_h
@@ -517,7 +528,7 @@ class SimDrone:
                 eh[2] = 0.0
                 dh = float(np.linalg.norm(eh))
                 if dh > 1e-9:
-                    hold_cap = float(self.cfg.velocity_levels.MEDIUM)
+                    hold_cap = level_mps(self.cfg, "MEDIUM")
                     v_h = min(hold_cap,
                               math.sqrt(2.0 * self._accel * dh) * brake)
                     vdes[0:2] = eh[0:2] / dh * v_h

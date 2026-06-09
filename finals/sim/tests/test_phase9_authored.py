@@ -10,7 +10,6 @@ behind the switch (its own suite lives in test_phase1_world.py).
 import copy
 import math
 
-import numpy as np
 import pytest
 
 from simcore import arena
@@ -30,7 +29,8 @@ def cfg():
 
 
 def _expected_obstacle_count(cfg) -> int:
-    return sum(cl.boxes for cl in cfg.arena.authored.clusters) + 3  # +archway
+    # one crate per authored cluster entry + 3 archway parts
+    return len(cfg.arena.authored.clusters) + 3
 
 
 # --------------------------------------------------------------------------- #
@@ -55,24 +55,14 @@ def test_authored_clusters_at_configured_positions(cfg):
     au = cfg.arena.authored
     assert len(layout.obstacles) == _expected_obstacle_count(cfg)
 
-    crate = au.crate_m
-    idx = 0
-    for cl in au.clusters:
-        heights = np.linspace(cl.height_m[0], cl.height_m[1], cl.boxes)
-        for i in range(cl.boxes):
-            o = layout.obstacles[idx]
-            dn, de = arena._CLUSTER_PATTERN[i]
-            assert o.north == pytest.approx(cl.center[0] + dn * crate)
-            assert o.east == pytest.approx(cl.center[1] + de * crate)
-            assert o.half_n == o.half_e == pytest.approx(crate / 2)
-            assert o.height_m == pytest.approx(float(heights[i]))
-            assert o.z0_m == 0.0           # crates sit on the floor
-            idx += 1
-        # heights vary within the configured band
-        hs = [layout.obstacles[idx - cl.boxes + i].height_m
-              for i in range(cl.boxes)]
-        assert min(hs) == pytest.approx(cl.height_m[0])
-        assert max(hs) == pytest.approx(cl.height_m[1])
+    # each authored cluster entry is ONE crate at its configured center/size/height
+    for cl, o in zip(au.clusters, layout.obstacles[:len(au.clusters)]):
+        assert o.north == pytest.approx(cl.center[0])
+        assert o.east == pytest.approx(cl.center[1])
+        assert o.half_n == pytest.approx(cl.size[0] / 2)
+        assert o.half_e == pytest.approx(cl.size[1] / 2)
+        assert o.height_m == pytest.approx(float(cl.height))
+        assert o.z0_m == 0.0               # crates sit on the floor
 
 
 def test_archway_geometry(cfg):

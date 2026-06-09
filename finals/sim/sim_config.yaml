@@ -39,16 +39,31 @@ arena:
                            # unchanged) — the 3D recording sees objects behind
   origin: [0.0, 0.0, 0.0]  # where the arena/UWB origin sits in pybullet world
   yaw_deg: 0.0             # arena->world rotation (0 = aligned)
-  # --- authored layout (layout: authored) — APPROXIMATE coords, adjust freely.
-  # north = image bottom->top, east = image left->right; entrance is SW (~0.5, 0.5).
+  # --- authored layout (layout: authored): one entry PER CRATE, fully data-
+  # driven so the real Discord arena coordinates drop straight in.
+  # PROVISIONAL: positions/heights below are a best estimate from the brief
+  # images, NOT confirmed measurements — replace with the Discord numbers.
+  # center = arena (north, east) m; size = footprint [north_m, east_m]; height m.
+  # north = image bottom->top, east = image left->right; entrance is SW (~0.5,0.5).
+  # (The same data is emitted to arena_truth.yaml for the mission to read.)
   authored:
-    crate_m: 0.45          # crate footprint side; cluster boxes touch like stacked crates
-    clusters:              # crate clusters at image positions; heights vary [min, max]
-      - { center: [5.0, 3.0], boxes: 5, height_m: [0.4, 1.2] }   # central plus of crates
-      - { center: [7.5, 4.2], boxes: 2, height_m: [0.6, 1.0] }   # upper-right pair
-      - { center: [4.6, 5.4], boxes: 2, height_m: [0.4, 0.9] }   # right-edge pair
-      - { center: [3.0, 3.5], boxes: 2, height_m: [0.5, 1.1] }   # lower-centre pair
-    archway: { corner: [9.0, 5.0], width_m: 1.0, height_m: 1.2 } # tunnel in the NE corner
+    clusters:
+      # central crate group (PROVISIONAL)
+      - { center: [5.00, 3.00], size: [0.45, 0.45], height: 0.4 }
+      - { center: [5.45, 3.00], size: [0.45, 0.45], height: 0.6 }
+      - { center: [5.00, 3.45], size: [0.45, 0.45], height: 0.8 }
+      - { center: [4.55, 3.00], size: [0.45, 0.45], height: 1.0 }
+      - { center: [5.45, 3.45], size: [0.45, 0.45], height: 1.2 }
+      # upper-right pair (PROVISIONAL)
+      - { center: [7.50, 4.20], size: [0.45, 0.45], height: 0.6 }
+      - { center: [7.95, 4.20], size: [0.45, 0.45], height: 1.0 }
+      # right-edge pair (PROVISIONAL)
+      - { center: [4.60, 5.40], size: [0.45, 0.45], height: 0.4 }
+      - { center: [5.05, 5.40], size: [0.45, 0.45], height: 0.9 }
+      # lower-centre pair (PROVISIONAL)
+      - { center: [3.00, 3.50], size: [0.45, 0.45], height: 0.5 }
+      - { center: [3.45, 3.50], size: [0.45, 0.45], height: 1.1 }
+    archway: { corner: [9.0, 5.0], width_m: 1.0, height_m: 1.2 } # tunnel in the NE corner (PROVISIONAL)
   # --- procedural layout (layout: procedural) — the seeded random generator ---
   obstacles:
     count: 8
@@ -65,14 +80,17 @@ arena:
 # These are the SIM's real-world speeds per level (TURBO fastest). The sim maps
 # by level NAME via this table; it must never treat the enum int as a speed.
 # CONFIRMED (HG-F09 manual): programming-mode speed band is 0.5-1.0 m/s.
-velocity_levels:           # m/s per pyhulax speed level, capped at 1.0
+velocity_levels:           # m/s per pyhulax speed level. Finals brief: HARD
+                           # 0.5 m/s cap -> every level is clamped to max_mps
+                           # at the mapping (enum/API untouched).
   SLOW: 0.3                # below the band, for gentle moves
-  MEDIUM: 0.5
-  ZOOM: 0.8                # pyhulax default level
-  TURBO: 1.0               # the real cap
+  MEDIUM: 0.5              # the usable max
+  ZOOM: 0.8                # raw band value -> CLAMPS to max_mps (0.5)
+  TURBO: 1.0               # raw band value -> CLAMPS to max_mps (0.5)
+  max_mps: 0.5             # HULA hard speed cap (Finals brief): no level above
   yaw_rate_dps: 60.0       # rotate() angular speed
-  climb_mps: 1.2           # confirmed asymmetric vertical: climb 1.2 m/s
-  descent_mps: 1.0         #                                descend 1.0 m/s
+  climb_mps: 1.2           # vertical (separate from the 0.5 horizontal cap)
+  descent_mps: 1.0         #
 
 # --- Airframe motion realism ---------------------------------------------------
 # Models BEHAVIOUR (ramps, settling, latency, slow bounded drift) — NOT a

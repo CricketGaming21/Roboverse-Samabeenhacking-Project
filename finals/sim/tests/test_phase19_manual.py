@@ -15,10 +15,11 @@ import pybullet as p
 import pytest
 
 from pyhulax import DroneAPI
-from pyhulax.core import Direction
+from pyhulax.core import Direction, VelocityLevel
 
 from simcore import frames
 from simcore.config import load_config
+from simcore.drone_model import speed_to_mps
 from simcore.registry import get_registry, shutdown_registry
 
 E = inspect.Parameter.empty
@@ -71,7 +72,7 @@ def test_half_forward_ramps_to_half_band():
         d.hover(1.0)
         samples = _pump(d, reg, 2.5, forward=0.5)     # ~10 sim s held
         speeds = [float(np.linalg.norm(v[:2])) for _t, _p, v, _ti, _y in samples]
-        band = cfg.velocity_levels.TURBO
+        band = speed_to_mps(cfg, VelocityLevel.TURBO)  # clamped to the 0.5 cap
         assert speeds[0] < 0.5 * 0.5 * band           # ramped, not instant
         steady = speeds[len(speeds) // 2:]
         assert np.mean(steady) == pytest.approx(0.5 * band, rel=0.12)

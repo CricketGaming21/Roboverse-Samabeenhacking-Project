@@ -5,3 +5,4 @@ out*.png
 assets/*.png
 assets/unit_quad_id*.obj
 *.jsonl
+*:Zone.Identifier

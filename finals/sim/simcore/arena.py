@@ -170,31 +170,26 @@ def _place_rovers(cfg, rng, obstacles) -> tuple:
     return tuple(placed)
 
 
-# Deterministic local arrangement of touching crates within a cluster, in
-# units of crate_m around the centre: a plus/L look like the reference photos.
-_CLUSTER_PATTERN = ((0, 0), (1, 0), (0, 1), (-1, 0), (1, 1),
-                    (0, -1), (-1, 1), (1, -1), (2, 0), (0, 2))
 _PILLAR_HALF_M = 0.15     # archway pillar footprint half-side
 _LINTEL_THICK_M = 0.3     # archway lintel thickness
 
 
 def _authored_obstacles(cfg) -> tuple:
-    """The fixed crate clusters + archway from arena.authored. No RNG."""
+    """The fixed crates + archway from arena.authored — one ObstacleSpec per
+    authored crate (center / size / height), data-driven, no RNG."""
     au = cfg.arena.authored
-    crate = float(au.crate_m)
-    half = crate / 2.0
     obstacles = []
     for ci, cl in enumerate(au.clusters):
-        if cl.boxes > len(_CLUSTER_PATTERN):
-            raise ValueError(f"authored cluster {ci}: at most "
-                             f"{len(_CLUSTER_PATTERN)} boxes supported")
-        h_lo, h_hi = cl.height_m
-        heights = np.linspace(float(h_lo), float(h_hi), cl.boxes)
-        cn, ce = cl.center
-        for i in range(cl.boxes):
-            dn, de = _CLUSTER_PATTERN[i]
-            obstacles.append(ObstacleSpec(cn + dn * crate, ce + de * crate,
-                                          half, half, float(heights[i])))
+        if len(cl.center) != 2 or len(cl.size) != 2:
+            raise ValueError(f"authored crate {ci}: center and size must each "
+                             f"be [north, east] pairs (got {cl})")
+        cn, ce = float(cl.center[0]), float(cl.center[1])
+        sn, se = float(cl.size[0]), float(cl.size[1])
+        if sn <= 0.0 or se <= 0.0 or float(cl.height) <= 0.0:
+            raise ValueError(f"authored crate {ci}: size and height must be "
+                             f"positive (got {cl})")
+        obstacles.append(ObstacleSpec(cn, ce, sn / 2.0, se / 2.0,
+                                      float(cl.height)))
     arch = au.archway
     an, ae = arch.corner
     off = arch.width_m / 2.0 + _PILLAR_HALF_M  # pillar centres off the axis

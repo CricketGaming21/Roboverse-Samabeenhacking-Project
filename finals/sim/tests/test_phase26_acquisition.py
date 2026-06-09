@@ -119,12 +119,15 @@ def test_first_bank_flash_then_fades():
     try:
         d = DroneAPI()
         d.connect(cfg.drones.units[0].ip)
-        rover_id = _scan_pose(reg, cfg, d)
         rec = ArenaRecorder(reg, "/tmp/_p26_flash.mp4")
-        # before any bank: no flash
+        # before the drone is positioned to see any marker: nothing banked, so
+        # no flash. (Captured BEFORE _scan_pose: the referee can bank during a
+        # slow approach once the marker enters the down-camera, so the baseline
+        # must be taken while no marker is yet in view.)
         banked, flash = rec._acquisition_state()
-        assert rover_id not in flash
-        # force the bank, then the first _acquisition_state flags it flashing
+        assert not flash
+        rover_id = _scan_pose(reg, cfg, d)
+        # force the bank, then the next _acquisition_state flags it flashing
         import time
         deadline = time.time() + 8.0
         while time.time() < deadline and rover_id not in reg.referee.banked_ids():

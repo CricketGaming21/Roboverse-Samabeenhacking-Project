@@ -13,9 +13,10 @@ import numpy as np
 import pytest
 
 from pyhulax import DroneAPI
-from pyhulax.core import Direction
+from pyhulax.core import Direction, VelocityLevel
 
 from simcore.config import load_config
+from simcore.drone_model import speed_to_mps
 from simcore.registry import get_registry, shutdown_registry
 
 
@@ -65,10 +66,10 @@ def test_move_shows_accel_cruise_decel_profile():
         d = _connect(cfg)
         d.takeoff(100)
         d.hover(1.0)  # settle out of the climb
-        d.move(Direction.FORWARD, 300, blocking=False)  # 3 m at ZOOM 0.8
+        d.move(Direction.FORWARD, 300, blocking=False)  # 3 m at ZOOM (clamped)
         samples = _sample_motion(reg, until_goal_done=True)
         speeds = [v for _t, _p, v, _ti in samples]
-        cap = cfg.velocity_levels.ZOOM
+        cap = speed_to_mps(cfg, VelocityLevel.ZOOM)  # clamped to the 0.5 cap
         assert max(speeds) == pytest.approx(cap, rel=0.15)  # reaches cruise
         assert speeds[0] < 0.5 * cap          # started slow: a RAMP, no step
         peak = speeds.index(max(speeds))
@@ -91,7 +92,7 @@ def test_body_tilts_during_accel_and_levels_at_cruise():
         samples = _sample_motion(reg, until_goal_done=True)
         tilts = [ti for _t, _p, _v, ti in samples]
         speeds = [v for _t, _p, v, _ti in samples]
-        cap = cfg.velocity_levels.ZOOM
+        cap = speed_to_mps(cfg, VelocityLevel.ZOOM)  # clamped to the 0.5 cap
         assert max(abs(t) for t in tilts) <= cfg.motion.max_tilt_deg + 1e-6
         assert max(abs(t) for t in tilts) > 5.0      # it really tilts
         # nose-down (negative) while accelerating forward

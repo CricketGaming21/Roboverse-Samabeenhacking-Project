@@ -69,10 +69,15 @@ class ObstaclesConfig:
 
 @dataclass
 class AuthoredClusterSpec:
-    """One crate cluster of the authored map: touching boxes around a centre."""
-    center: list = field(default_factory=lambda: [5.0, 3.0])  # arena (north, east)
-    boxes: int = 2
-    height_m: list = field(default_factory=lambda: [0.4, 1.0])  # [min, max]
+    """ONE crate of the authored map (config rovers.arena.authored.clusters).
+
+    Fully data-driven so the real Discord coordinates drop straight in:
+    `center` = arena (north, east) m of the footprint centre; `size` = full
+    footprint [north_m, east_m] (a.k.a. [depth, width]); `height` = crate
+    height m. Square crates are the common case (size [s, s])."""
+    center: list = field(default_factory=lambda: [5.0, 3.0])    # arena (n, e) m
+    size: list = field(default_factory=lambda: [0.45, 0.45])    # [north_m, east_m]
+    height: float = 1.0                                         # crate height m
 
 
 @dataclass
@@ -85,14 +90,29 @@ class ArchwayConfig:
 
 @dataclass
 class AuthoredConfig:
-    """Fixed layout matching the reference images (arena.layout: authored).
-    Coordinates are APPROXIMATE (read off a low-res top-down) — adjust freely."""
-    crate_m: float = 0.45             # crate footprint side; cluster boxes touch
+    """Fixed layout for arena.layout: authored — each crate's center/size/height
+    is data-driven so the real Discord arena coordinates drop straight in.
+
+    PROVISIONAL DEFAULTS: these crate positions/heights are a best estimate read
+    off the brief images — NOT confirmed measurements. Replace the whole
+    `clusters` list (and length_m/width_m/archway) with the Discord numbers when
+    available. The same data is emitted to arena_truth.yaml for the mission."""
     clusters: list = field(default_factory=lambda: [
-        AuthoredClusterSpec(center=[5.0, 3.0], boxes=5, height_m=[0.4, 1.2]),
-        AuthoredClusterSpec(center=[7.5, 4.2], boxes=2, height_m=[0.6, 1.0]),
-        AuthoredClusterSpec(center=[4.6, 5.4], boxes=2, height_m=[0.4, 0.9]),
-        AuthoredClusterSpec(center=[3.0, 3.5], boxes=2, height_m=[0.5, 1.1]),
+        # central crate group (PROVISIONAL)
+        AuthoredClusterSpec(center=[5.00, 3.00], size=[0.45, 0.45], height=0.4),
+        AuthoredClusterSpec(center=[5.45, 3.00], size=[0.45, 0.45], height=0.6),
+        AuthoredClusterSpec(center=[5.00, 3.45], size=[0.45, 0.45], height=0.8),
+        AuthoredClusterSpec(center=[4.55, 3.00], size=[0.45, 0.45], height=1.0),
+        AuthoredClusterSpec(center=[5.45, 3.45], size=[0.45, 0.45], height=1.2),
+        # upper-right pair (PROVISIONAL)
+        AuthoredClusterSpec(center=[7.50, 4.20], size=[0.45, 0.45], height=0.6),
+        AuthoredClusterSpec(center=[7.95, 4.20], size=[0.45, 0.45], height=1.0),
+        # right-edge pair (PROVISIONAL)
+        AuthoredClusterSpec(center=[4.60, 5.40], size=[0.45, 0.45], height=0.4),
+        AuthoredClusterSpec(center=[5.05, 5.40], size=[0.45, 0.45], height=0.9),
+        # lower-centre pair (PROVISIONAL)
+        AuthoredClusterSpec(center=[3.00, 3.50], size=[0.45, 0.45], height=0.5),
+        AuthoredClusterSpec(center=[3.45, 3.50], size=[0.45, 0.45], height=1.1),
     ])
     archway: ArchwayConfig = field(default_factory=ArchwayConfig)
 
@@ -116,15 +136,18 @@ class ArenaConfig:
 
 @dataclass
 class VelocityLevelsConfig:
-    """m/s per pyhulax speed level. CONFIRMED: the Hula HG-F09's
-    programming-mode speed band is 0.5-1.0 m/s (official manual) — capped
-    at 1.0; SLOW sits below the band for gentle moves."""
+    """m/s per pyhulax speed level (mapped by NAME). The HG-F09 manual band is
+    0.5-1.0 m/s, but the RoboVerse Finals brief sets a HARD 0.5 m/s cap on the
+    HULA, so every horizontal level is CLAMPED to max_mps at the mapping (the
+    enum names/values and the public API are untouched — only the mapped speed
+    clamps). MEDIUM is the usable max; ZOOM/TURBO clamp down to it."""
     SLOW: float = 0.3
     MEDIUM: float = 0.5
-    ZOOM: float = 0.8
-    TURBO: float = 1.0
+    ZOOM: float = 0.8                 # raw band value; clamps to max_mps
+    TURBO: float = 1.0                # raw band value; clamps to max_mps
+    max_mps: float = 0.5              # HARD cap (Finals brief): no level exceeds
     yaw_rate_dps: float = 60.0
-    climb_mps: float = 1.2            # confirmed asymmetric vertical speeds
+    climb_mps: float = 1.2            # vertical (separate from the 0.5 h-cap)
     descent_mps: float = 1.0
 
 

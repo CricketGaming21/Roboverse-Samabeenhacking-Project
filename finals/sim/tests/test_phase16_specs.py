@@ -51,11 +51,16 @@ def test_confirmed_spec_values(cfg):
     assert cfg.motion.max_tilt_deg == 20.0       # body tilt (Phase 18 input)
 
 
-def test_speed_band_capped_at_one_mps(cfg):
+def test_speed_levels_clamped_to_half_mps_hard_cap(cfg):
+    # Finals brief: HULA hard cap 0.5 m/s. The raw band values stay in config,
+    # but NO level maps above max_mps — ZOOM/TURBO clamp down to MEDIUM.
+    assert cfg.velocity_levels.max_mps == 0.5
     for level in VelocityLevel:
-        assert speed_to_mps(cfg, level) <= 1.0
-    assert speed_to_mps(cfg, VelocityLevel.TURBO) == 1.0
-    assert speed_to_mps(cfg, VelocityLevel.ZOOM) == 0.8
+        assert speed_to_mps(cfg, level) <= 0.5 + 1e-9
+    assert speed_to_mps(cfg, VelocityLevel.SLOW) == 0.3      # below cap: unchanged
+    assert speed_to_mps(cfg, VelocityLevel.MEDIUM) == 0.5    # the usable max
+    assert speed_to_mps(cfg, VelocityLevel.ZOOM) == 0.5      # clamped
+    assert speed_to_mps(cfg, VelocityLevel.TURBO) == 0.5     # clamped
 
 
 def test_detection_range_geometry_at_fov71(cfg):
