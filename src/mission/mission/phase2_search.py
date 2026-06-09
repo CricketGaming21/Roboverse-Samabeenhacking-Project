@@ -17,8 +17,11 @@ import math
 import time
 from typing import Callable, List, Optional, Sequence, Tuple
 
+import numpy as np
+
 from mission.control.uwb_loop import fly_to_uwb
 from mission.perception.aruco import confirm_with_aruco, is_rover_id
+from mission.planner.geometry import Rect
 from mission.planner.projection import CameraIntrinsics, pixel_to_arena
 from mission.world.taskboard import Track
 
@@ -203,6 +206,140 @@ def phase2_search(drone, uwb, tag_id: int, vantages: Sequence[dict], stream, sta
                           **loop_kwargs):
             break
     return banked
+
+
+# --------------------------------------------------------------------------- #
+# P8 — adversarial evader handling
+# --------------------------------------------------------------------------- #
+def classify_behaviour(samples: Sequence[Point], *, erratic_turn_std_deg: float = 45.0,
+                       periodic_close_frac: float = 0.25,
+                       min_path_m: float = 0.3) -> str:
+    """Triage a track's recent path → 'smooth' | 'periodic' | 'erratic' | 'unknown'.
+
+    Erratic (human evader) ⇒ high turn-angle variance. Periodic (loop) ⇒ low variance and
+    returns near its start. Smooth (autonomous convoy) ⇒ low variance, open path."""
+    pts = [(float(p[0]), float(p[1])) for p in samples]
+    if len(pts) < 3:
+        return "unknown"
+    turns: List[float] = []
+    path_len = 0.0
+    for i in range(1, len(pts) - 1):
+        v1 = (pts[i][0] - pts[i - 1][0], pts[i][1] - pts[i - 1][1])
+        v2 = (pts[i + 1][0] - pts[i][0], pts[i + 1][1] - pts[i][1])
+        path_len += math.hypot(*v1)
+        if math.hypot(*v1) < 1e-9 or math.hypot(*v2) < 1e-9:
+            continue
+        ang = math.degrees(math.atan2(v1[0] * v2[1] - v1[1] * v2[0],
+                                      v1[0] * v2[0] + v1[1] * v2[1]))
+        turns.append(ang)
+    path_len += math.hypot(pts[-1][0] - pts[-2][0], pts[-1][1] - pts[-2][1])
+    if not turns or path_len < min_path_m:
+        return "unknown"
+    std = float(np.std(turns))
+    if std > erratic_turn_std_deg:
+        return "erratic"
+    closes = math.dist(pts[0], pts[-1]) < periodic_close_frac * path_len
+    return "periodic" if closes else "smooth"
+
+
+class ReachableSet:
+    """Where an evader could be, on the free-space grid. Holding a chokepoint `cut`s the
+    set; with no expansion the size is monotonically non-increasing → containment shrinks
+    the search (docs/ARCHITECTURE.md). Lane-graph reachability, not probability."""
+
+    def __init__(self, bounds: Rect,
+                 footprints: Sequence[Tuple[float, float, float, float]] = (),
+                 cell_size: float = 0.25):
+        self.bounds = bounds
+        self.cell = float(cell_size)
+        self.nn = max(1, int(round((bounds.max_n - bounds.min_n) / self.cell)))
+        self.ne = max(1, int(round((bounds.max_e - bounds.min_e) / self.cell)))
+        self.free = np.ones((self.nn, self.ne), dtype=bool)
+        for i in range(self.nn):
+            for j in range(self.ne):
+                cn, ce = self._center(i, j)
+                for fn, fe, sn, se in footprints:
+                    if abs(cn - fn) <= sn / 2 and abs(ce - fe) <= se / 2:
+                        self.free[i, j] = False
+                        break
+        self.barrier = np.zeros((self.nn, self.ne), dtype=bool)
+        self.reach = self.free.copy()
+        self._anchor: Optional[Tuple[int, int]] = None
+
+    def _center(self, i: int, j: int) -> Point:
+        return (self.bounds.min_n + (i + 0.5) * self.cell,
+                self.bounds.min_e + (j + 0.5) * self.cell)
+
+    def cell_of(self, xy: Point) -> Tuple[int, int]:
+        i = int((xy[0] - self.bounds.min_n) / self.cell)
+        j = int((xy[1] - self.bounds.min_e) / self.cell)
+        return (min(max(i, 0), self.nn - 1), min(max(j, 0), self.ne - 1))
+
+    def _component(self, start: Tuple[int, int]) -> np.ndarray:
+        from collections import deque
+        passable = self.free & ~self.barrier
+        out = np.zeros_like(self.free)
+        if not passable[start]:
+            return out
+        out[start] = True
+        q = deque([start])
+        while q:
+            i, j = q.popleft()
+            for di, dj in ((1, 0), (-1, 0), (0, 1), (0, -1)):
+                ni, nj = i + di, j + dj
+                if 0 <= ni < self.nn and 0 <= nj < self.ne and \
+                        passable[ni, nj] and not out[ni, nj]:
+                    out[ni, nj] = True
+                    q.append((ni, nj))
+        return out
+
+    def seed(self, xy: Point) -> None:
+        self._anchor = self.cell_of(xy)
+        self.reach = self._component(self._anchor)
+
+    def cut(self, xy: Point, radius_m: float = 0.4) -> None:
+        ci, cj = self.cell_of(xy)
+        r = int(math.ceil(radius_m / self.cell))
+        for i in range(max(0, ci - r), min(self.nn, ci + r + 1)):
+            for j in range(max(0, cj - r), min(self.ne, cj + r + 1)):
+                if math.hypot(*[a - b for a, b in zip(self._center(i, j), xy)]) <= radius_m:
+                    self.barrier[i, j] = True
+        if self._anchor is not None:
+            self.reach = self._component(self._anchor)
+
+    def expand(self, dt: float, speed: float) -> None:
+        steps = max(1, int(round(speed * dt / self.cell)))
+        passable = self.free & ~self.barrier
+        for _ in range(steps):
+            grown = self.reach.copy()
+            for di, dj in ((1, 0), (-1, 0), (0, 1), (0, -1)):
+                grown |= np.roll(self.reach, (di, dj), axis=(0, 1))
+            self.reach = grown & passable
+
+    def size(self) -> int:
+        return int(self.reach.sum())
+
+    def contains(self, xy: Point) -> bool:
+        return bool(self.reach[self.cell_of(xy)])
+
+
+def plan_containment(reachable: ReachableSet, chokepoints: Sequence[Point],
+                     n_blockers: int) -> List[Point]:
+    """Pick up to `n_blockers` chokepoints that best bound the reachable set (those whose
+    neighbourhood overlaps the reachable region most) — hold these to shrink it."""
+    scored = []
+    for cp in chokepoints:
+        cells = 0
+        ci, cj = reachable.cell_of(cp)
+        r = 2
+        for i in range(max(0, ci - r), min(reachable.nn, ci + r + 1)):
+            for j in range(max(0, cj - r), min(reachable.ne, cj + r + 1)):
+                if reachable.reach[i, j]:
+                    cells += 1
+        if cells > 0:
+            scored.append((cells, cp))
+    scored.sort(key=lambda s: -s[0])
+    return [cp for _, cp in scored[:n_blockers]]
 
 
 # resolved once (the fake/real enum)

@@ -11,8 +11,9 @@
 | P4   | ✅ GREEN | 7 / 106            | 75f1195 | phase-1 deploy + land in hoop |
 | P5   | ✅ GREEN | 8 / 114            | bc766fd | perception: aruco + detector seam |
 | P6   | ✅ GREEN | 12 / 126           | 2973a80 | shared world model |
-| P7   | ✅ GREEN | 9 / 135            | (this) | phase-2 search + lock-on + tag |
-| P8   | TODO   | – / –               | –      | not started |
+| P7   | ✅ GREEN | 9 / 135            | d7aaac1 | phase-2 search + lock-on + tag |
+| P8   | ✅ GREEN | 9 / 144            | (this) | adversarial evader handling |
+| P9   | TODO   | – / –               | –      | not started |
 
 ## Reference-source note (read once)
 The authoritative `reference/pyhulax_knowledge_base.txt` and `reference/brief/Finals_brief.pdf`
@@ -26,6 +27,19 @@ real sim and the KB) and the vendored `provided_code/` (`UWBParserThread.py`, `d
 signatures — the fake encodes the doc's values.
 
 ## Log
+
+### P8 — Adversarial evader handling  ✅
+Added evader logic to `phase2_search.py`: `classify_behaviour` triages a track's recent path into
+smooth/periodic/erratic from turn-angle variance + loop-closure; `ReachableSet` models where an
+evader can be on the free-space grid (`seed`/`expand`/`cut`/`size`) so holding a chokepoint
+(`cut`) is **monotonically non-increasing** by construction (the connected component from the
+anchor can only shrink as barriers are added); `plan_containment` picks the chokepoints bordering
+the reachable set. Extended `Coordinator` with behaviour-aware tasking: **secure the predictable
+autonomous tags first** (no evader commitment while untagged autonomous tracks remain), then a
+pursuer TAGs the belief argmax while others BLOCK chokepoints, with **tick-based rotation** of the
+block assignments to break standoffs. Tests cover triage, monotonic containment + room isolation,
+the autonomous-before-evader ordering, pursuit/containment role assignment, and rotation. Full
+teleop realism is an `integration` test (needs the sim's evasive mode) — excluded from the gate.
 
 ### P7 — Phase 2: search + lock-on + tag  ✅
 Built `src/mission/mission/phase2_search.py`: `lock_and_tag` is a visual servo on the marker's
