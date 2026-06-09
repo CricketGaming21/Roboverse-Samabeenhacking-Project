@@ -12,8 +12,9 @@
 | P5   | ✅ GREEN | 8 / 114            | bc766fd | perception: aruco + detector seam |
 | P6   | ✅ GREEN | 12 / 126           | 2973a80 | shared world model |
 | P7   | ✅ GREEN | 9 / 135            | d7aaac1 | phase-2 search + lock-on + tag |
-| P8   | ✅ GREEN | 9 / 144            | (this) | adversarial evader handling |
-| P9   | TODO   | – / –               | –      | not started |
+| P8   | ✅ GREEN | 9 / 144            | 77e2a0b | adversarial evader handling |
+| P9   | ✅ GREEN | 9 / 153            | (this) | planner GUI export contract |
+| P10  | TODO   | – / –               | –      | not started |
 
 ## Reference-source note (read once)
 The authoritative `reference/pyhulax_knowledge_base.txt` and `reference/brief/Finals_brief.pdf`
@@ -27,6 +28,20 @@ real sim and the KB) and the vendored `provided_code/` (`UWBParserThread.py`, `d
 signatures — the fake encodes the doc's values.
 
 ## Log
+
+### P9 — Mission Planner GUI export contract  ✅
+Built `src/mission/mission/plan.py` (pydantic `MissionPlan` loader, `extra="forbid"`; `validate_plan`
+enforces the geometric rules — every route segment footprint-clear + in bounds, vantages inside
+their footprint-clear bubble, bubbles pairwise disjoint with a buffer, pad_ids valid — raising
+`PlanValidationError`; consumer helpers `pad_assignment`/`route`/`bubble`/`vantages`) and a single-
+file `planner_gui/index.html` (canvas authoring of routes + vantages with live red-on-invalid
+validation, inter-path conflict highlight, and `mission_plan.yaml`/PNG export matching the schema).
+**Fixed the committed `examples/mission_plan.example.yaml`** — the scaffold's route 0 crossed the
+inflated crate (invalid); re-authored all three drones with footprint-clear routes to their pads,
+vantages inside disjoint east-band bubbles, and valid pad ids (PHASE_PLAN authorizes maintaining
+this fixture). Tests: the example loads + validates + is consumed by P4 (pads valid, routes clear)
+and P7 (vantages in bubbles, correct dict shape); unknown keys, a crate-crossing route, an out-of-
+bubble vantage, an invalid pad (13), and overlapping bubbles each raise.
 
 ### P8 — Adversarial evader handling  ✅
 Added evader logic to `phase2_search.py`: `classify_behaviour` triages a track's recent path into
