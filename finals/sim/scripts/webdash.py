@@ -340,6 +340,7 @@ function card(d){
       <span class="title">drone ${i}</span>
       <span class="badge state" id="d${i}-state">—</span>
       <span class="badge" id="d${i}-uwb">UWB</span>
+      <span class="badge" id="d${i}-viol" style="display:none">VIOLATION</span>
       <span style="margin-left:auto;color:#8b949e" id="d${i}-ip"></span>
     </div><div class="body"><table class="tel"><tbody>${tel}</tbody></table>
     ${proxSvg(i)}</div>${feed}</div>`;
@@ -378,6 +379,12 @@ function update(s){
     const ub=document.getElementById(`d${i}-uwb`);
     if(ub){ ub.textContent = d.uwb_ok?'UWB OK':'UWB --';
             ub.className='badge '+(d.uwb_ok?'ok':'bad'); }
+    // compliance VIOLATION badge (no-fly-over-crate / altitude cap)
+    const c=d.compliance||{}, vb=document.getElementById(`d${i}-viol`);
+    if(vb){ if(c.violation){ vb.style.display='';
+              vb.className='badge bad';
+              vb.textContent='VIOLATION: '+(c.over_obstacle?'OVER CRATE':'ALT CAP');
+            } else { vb.style.display='none'; } }
     // proximity segments (boolean barrier flags only)
     const rays=d.sensors.rays;
     for(const k of ['forward','back','left','right','down']){

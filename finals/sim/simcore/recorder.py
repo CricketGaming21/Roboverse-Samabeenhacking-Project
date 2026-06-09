@@ -190,7 +190,12 @@ class ArenaRecorder:
             cmd = "CMD idle"
         batt_c = _GREEN if d["battery_pct"] > 25 else _AMBER
         uwb_c = _GREEN if d["uwb_ok"] else _RED
-        return [
+        comp = d.get("compliance", {})
+        rows = []
+        if comp.get("violation"):
+            why = "OVER CRATE" if comp.get("over_obstacle") else "ALT CAP"
+            rows.append((f"!! VIOLATION: {why}", _RED))
+        rows += [
             (f"d{d['index']} {'FLY' if d['flying'] else 'GND'}  "
              f"batt {d['battery_pct']:.0f}%", batt_c),
             (f"UWB n,e {n:5.2f},{e:5.2f} m", _GREY),
@@ -202,6 +207,7 @@ class ArenaRecorder:
             (cmd, _GREY),
             ("UWB: OK" if d["uwb_ok"] else "UWB: NO FIX", uwb_c),
         ]
+        return rows
 
     def _draw_proximity(self, panel, x0, y0, w, h, d):
         """Car-style parking-sensor graphic: a drone icon with the five

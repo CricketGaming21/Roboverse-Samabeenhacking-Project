@@ -314,6 +314,17 @@ dashboard:
   jpeg_quality: 75         # JPEG quality of the served offscreen frames
   min_render_period_s: 0.12  # server-side cap on offscreen render rate
 
+# --- Compliance flagging (no-fly-over-obstacle + altitude cap) ----------------
+# The brief's score-invalidation rules, made VISIBLE: an airborne drone OVER a
+# crate footprint, or above the altitude cap, is FLAGGED (logged + shown in
+# --record/--dashboard) — a flagged event, NOT a crash. PROVISIONAL cap.
+compliance:
+  enabled: true
+  max_altitude_m: 2.0      # PROVISIONAL altitude cap (recommended flight ~1.1 m)
+  margin_m: 0.0            # optional buffer around crate footprints
+  log_dir: logs/compliance # violation onset/clear transitions recorded here
+  check_period_s: 0.25     # throttle for the violation logger
+
 # --- Logging -----------------------------------------------------------------
 logging:
   level: INFO

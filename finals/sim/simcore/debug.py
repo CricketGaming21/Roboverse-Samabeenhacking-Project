@@ -22,7 +22,7 @@ import cv2
 import numpy as np
 import pybullet as p
 
-from . import aruco_assets, frames, sensors
+from . import aruco_assets, compliance, frames, sensors
 
 
 def _round3(seq):
@@ -169,6 +169,10 @@ class DebugProbe:
             "executing": drone.goal is not None,
             "blocked": self._blocked(drone),
             "sensors": self._sensor_dict(drone),
+            # Phase 33 compliance flag (no-fly-over-crate + altitude cap) so
+            # the recorder + dashboard can render a VIOLATION indicator.
+            "compliance": compliance.check(self._cfg, drone,
+                                           self._reg.layout.obstacles),
         }
 
     def _rover_dict(self, rover):

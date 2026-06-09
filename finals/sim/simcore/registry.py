@@ -21,8 +21,8 @@ import time
 
 import pybullet as p
 
-from . import (arena, camera, drone_model, frames, monitor, rover_model,
-               scenario, scoring, world)
+from . import (arena, camera, compliance, drone_model, frames, monitor,
+               rover_model, scenario, scoring, world)
 from .clock import SimClock
 from .config import SimConfig, load_config
 from .log import get_logger
@@ -56,6 +56,7 @@ class SimRegistry:
         self.monitor = monitor.CommandMonitor(self.config, self.clock)
         self.referee = None          # part-2 referee (after boot, if enabled)
         self.landing_scorer = scoring.LandingScorer(self)  # part-1 referee
+        self.compliance = None       # compliance flag logger (set during boot)
         self.scenario = None         # episode state machine (set during boot)
         self.renderer = p.ER_TINY_RENDERER  # upgraded if the EGL plugin loads
         self._egl_plugin = -1
@@ -256,6 +257,8 @@ class SimRegistry:
         """Stop the referee + sim thread and disconnect PyBullet. Idempotent."""
         if self.referee is not None:
             self.referee.stop()
+        if self.compliance is not None:
+            self.compliance.close()
         self._stop.set()
         self._thread.join(timeout=10)
         if self._thread.is_alive():
@@ -324,6 +327,7 @@ class SimRegistry:
         ]
         for r in self.rovers:             # evasive rovers flee the nearest drone
             r.bind_drones(self.drones)
+        self.compliance = compliance.ComplianceMonitor(self)
         self.scenario = scenario.Scenario(self)
         self.scenario.on_boot()
         self._log.info(
@@ -430,6 +434,8 @@ class SimRegistry:
                     for r in self.rovers:
                         r.step(dt)
                 self.scenario.step(self.clock.now())
+                if self.compliance is not None:
+                    self.compliance.step(self.clock.now())
                 steps += 1
 
         self._fail_pending_calls()

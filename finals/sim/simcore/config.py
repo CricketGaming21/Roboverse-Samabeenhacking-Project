@@ -418,6 +418,20 @@ class VizConfig:
 
 
 @dataclass
+class ComplianceConfig:
+    """The score-invalidation rules, made VISIBLE in-sim (Phase 33). An
+    airborne drone whose horizontal position is over a crate footprint
+    ("no flying over obstacles"), or whose altitude exceeds max_altitude_m,
+    is FLAGGED (logged + surfaced in --record/--dashboard) — a flagged event,
+    NOT a crash. PROVISIONAL cap until the organisers confirm."""
+    enabled: bool = True
+    max_altitude_m: float = 2.0       # PROVISIONAL altitude cap (recommended fly ~1.1 m)
+    margin_m: float = 0.0             # optional buffer around crate footprints
+    log_dir: str = "logs/compliance"  # violation transitions are recorded here
+    check_period_s: float = 0.25      # throttle for the violation logger
+
+
+@dataclass
 class MonitorConfig:
     max_cmd_rate_hz: float = 5.0
     warn_on_preempt: bool = True
@@ -499,6 +513,7 @@ class SimConfig:
     monitor: MonitorConfig = field(default_factory=MonitorConfig)
     record: RecordConfig = field(default_factory=RecordConfig)
     dashboard: DashboardConfig = field(default_factory=DashboardConfig)
+    compliance: ComplianceConfig = field(default_factory=ComplianceConfig)
     logging: LoggingConfig = field(default_factory=LoggingConfig)
 
 
