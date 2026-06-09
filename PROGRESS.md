@@ -5,8 +5,9 @@
 | Phase | Status | Tests (gate / full) | Commit | Notes |
 |------|--------|---------------------|--------|-------|
 | P0   | ✅ GREEN | 41 / 41            | 54444c9 | fake SDK substrate |
-| P1   | ✅ GREEN | 26 / 67            | (this) | config + frames + fly_to_uwb |
-| P2   | TODO   | – / –               | –      | not started |
+| P1   | ✅ GREEN | 26 / 67            | 6b12d91 | config + frames + fly_to_uwb |
+| P2   | ✅ GREEN | 19 / 86            | (this) | planner geometry + projection |
+| P3   | TODO   | – / –               | –      | not started |
 
 ## Reference-source note (read once)
 The authoritative `reference/pyhulax_knowledge_base.txt` and `reference/brief/Finals_brief.pdf`
@@ -20,6 +21,19 @@ real sim and the KB) and the vendored `provided_code/` (`UWBParserThread.py`, `d
 signatures — the fake encodes the doc's values.
 
 ## Log
+
+### P2 — Crate map + planner geometry + projection  ✅
+Built `src/mission/planner/arena.py` (loads `config/arena_truth.yaml` with `yaml.safe_load`,
+**no simcore** — HARD invariant #10), `src/mission/planner/geometry.py` (`inflate` →
+axis-aligned `Rect`s; `segment_clear` via Liang-Barsky against slightly-shrunk rects so
+boundary-tangent edges are allowed but interior crossings are rejected; `build_graph`
+visibility graph over pushed-out footprint corners; `plan_path` A* with start/goal as temp
+nodes; `paths_conflict` via segment-segment distance), and `src/mission/planner/projection.py`
+(pinhole `arena_to_pixel`/`pixel_to_arena`, exact inverses, **no depth**). Tests prove paths
+never cross an inflated footprint or leave bounds, `None` when goal is blocked / arena is walled
+off, the real `arena_truth` routes cleanly, conflict detection flags crossing/too-close paths,
+projection round-trips to 1e-6, and `pixel_to_arena` recovers a **rendered** marker's known arena
+position to within 0.1 m (ties projection.py to the fake camera model — they share the pinhole).
 
 ### P1 — Config + frames + UWB control loop  ✅
 Built `src/mission/config.py` (pydantic, every section `extra="forbid"` → unknown keys raise;
