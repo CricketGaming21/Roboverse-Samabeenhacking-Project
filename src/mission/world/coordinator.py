@@ -29,10 +29,31 @@ class Coordinator:
     def __init__(self, *, secure_autonomous_first: bool = True):
         self.secure_autonomous_first = secure_autonomous_first
         self.tick = 0
+        self._overrides: Dict[int, Assignment] = {}      # operator forced assignments (P10)
+        self._hold_all = False
+
+    # -- operator overrides (C2, P10) ------------------------------------ #
+    def force(self, tag_id: int, role: Role, target: Optional[Point] = None) -> None:
+        self._overrides[tag_id] = Assignment(role, target)
+
+    def clear_override(self, tag_id: int) -> None:
+        self._overrides.pop(tag_id, None)
+
+    def hold_all(self, on: bool = True) -> None:
+        self._hold_all = bool(on)
+
+    def clear_all(self) -> None:
+        self._overrides.clear()
+        self._hold_all = False
 
     def step(self, state, taskboard: TaskBoard, belief, drones: Sequence[DroneView], *,
              chokepoints: Optional[Sequence[Point]] = None) -> Dict[int, Assignment]:
         self.tick += 1
+        if self._hold_all:                               # operator HOLD-ALL wins
+            out = {d.tag_id: Assignment(Role.HOLD, None) for d in drones}
+            for tag, a in out.items():
+                taskboard.assign(tag, a.role, a.target)
+            return out
         tagged = state.tagged()
         open_tracks = [t for t in taskboard.tracks()
                        if t.marker_id is not None and t.marker_id not in tagged]
@@ -43,7 +64,13 @@ class Coordinator:
                          key=lambda t: t.marker_id)
 
         out: Dict[int, Assignment] = {}
-        free: List[DroneView] = [d for d in drones if not d.busy_locked]
+        forced = set()
+        for d in drones:                                 # operator per-drone overrides
+            if d.tag_id in self._overrides:
+                out[d.tag_id] = self._overrides[d.tag_id]
+                forced.add(d.tag_id)
+        free: List[DroneView] = [d for d in drones
+                                 if not d.busy_locked and d.tag_id not in forced]
         region = belief.argmax_region() if belief is not None else None
 
         # Phase A — secure the predictable autonomous tags FIRST

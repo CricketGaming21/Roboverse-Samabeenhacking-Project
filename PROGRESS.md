@@ -13,8 +13,9 @@
 | P6   | ✅ GREEN | 12 / 126           | 2973a80 | shared world model |
 | P7   | ✅ GREEN | 9 / 135            | d7aaac1 | phase-2 search + lock-on + tag |
 | P8   | ✅ GREEN | 9 / 144            | 77e2a0b | adversarial evader handling |
-| P9   | ✅ GREEN | 9 / 153            | (this) | planner GUI export contract |
-| P10  | TODO   | – / –               | –      | not started |
+| P9   | ✅ GREEN | 9 / 153            | 759bd7f | planner GUI export contract |
+| P10  | ✅ GREEN | 10 / 163           | (this) | C2 operator console |
+| P11  | TODO   | – / –               | –      | not started |
 
 ## Reference-source note (read once)
 The authoritative `reference/pyhulax_knowledge_base.txt` and `reference/brief/Finals_brief.pdf`
@@ -28,6 +29,20 @@ real sim and the KB) and the vendored `provided_code/` (`UWBParserThread.py`, `d
 signatures — the fake encodes the doc's values.
 
 ## Log
+
+### P10 — C2 operator console  ✅
+Built `src/mission/runtime/c2_bridge.py` (`C2Bridge`: `snapshot`/`to_json` of drones + footprints +
+zones + rover tracks + coarsened belief heatmap + rubric scoreboard + alarms — all
+JSON-serializable from the public world model only; `alarms` surfaces low-battery, UWB-dropout,
+near-collision and the **over-footprint NO-FLY** violation; `export_evidence` writes one annotated
+PNG per tagged id + a results.csv + a map.json bundle; `override` routes operator commands into the
+Coordinator) and a single-file `c2/index.html` (live top-down map with belief heatmap, camera
+tiles, scoreboard, alarm panel with the over-footprint highlight, pre-flight checklist, evidence
+export + override buttons; polls `state.json` with an embedded-sample fallback). Added operator
+override support to `Coordinator` (`force`/`hold_all`/`clear_all`, applied in `step`). Tests:
+snapshot is valid JSON, the over-footprint alarm fires on a synthetic violating pose (and not on a
+clean one), battery/UWB/near-collision alarms fire, scoreboard reflects state, the evidence bundle
+is produced, and retask/hold-all/resume overrides reach the coordinator.
 
 ### P9 — Mission Planner GUI export contract  ✅
 Built `src/mission/mission/plan.py` (pydantic `MissionPlan` loader, `extra="forbid"`; `validate_plan`

@@ -20,6 +20,7 @@ class Role(str, Enum):
     TAG = "TAG"         # go confirm-and-tag a specific target
     BLOCK = "BLOCK"     # hold a chokepoint (containment, P8)
     COVER = "COVER"     # watch a crate shadow / stale region
+    HOLD = "HOLD"       # station-keep (operator hold-all / recall, P10)
 
 
 @dataclass
