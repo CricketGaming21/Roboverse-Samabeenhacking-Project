@@ -8,8 +8,9 @@
 | P1   | ✅ GREEN | 26 / 67            | 6b12d91 | config + frames + fly_to_uwb |
 | P2   | ✅ GREEN | 19 / 86            | d29f1ec | planner geometry + projection |
 | P3   | ✅ GREEN | 13 / 99            | de673b8 | reactive avoidance guard |
-| P4   | ✅ GREEN | 7 / 106            | (this) | phase-1 deploy + land in hoop |
-| P5   | TODO   | – / –               | –      | not started |
+| P4   | ✅ GREEN | 7 / 106            | 75f1195 | phase-1 deploy + land in hoop |
+| P5   | ✅ GREEN | 8 / 114            | (this) | perception: aruco + detector seam |
+| P6   | TODO   | – / –               | –      | not started |
 
 ## Reference-source note (read once)
 The authoritative `reference/pyhulax_knowledge_base.txt` and `reference/brief/Finals_brief.pdf`
@@ -23,6 +24,17 @@ real sim and the KB) and the vendored `provided_code/` (`UWBParserThread.py`, `d
 signatures — the fake encodes the doc's values.
 
 ## Log
+
+### P5 — Perception: ArUco + detector seam + two-stage  ✅
+Built `src/mission/perception/detector.py` (`Detection` dataclass, `RoverDetector` ABC,
+`PlaceholderRoverDetector` + PRIMARY `ClassicalRoverDetector` (contrast/contour + optional motion
+gate), `ScanResult`, `two_stage_scan` — mirrors `reference/provided_code/rover_detection_example.py`)
+and `src/mission/perception/aruco.py` (`confirm_with_aruco` multi-marker decode with a
+`min_marker_px` gate, `is_pad_id`/`is_rover_id` where **pads=10–14 and ANY other id is a rover**,
+`split_pads_rovers`). The import cycle (two_stage→aruco→Detection) is broken by a lazy import inside
+`two_stage_scan`. Tests decode multiple + tilted markers off rendered frames, prove the px gate, the
+classical finder boxes a rendered rover near frame-centre, and `two_stage_scan` runs find→approach→
+confirm end-to-end returning the rover id.
 
 ### P4 — Phase 1: deploy + land in hoop  ✅
 Built `src/mission/mission/phase1_land.py` (`assign_pads` brute-forces drone→pad permutations
