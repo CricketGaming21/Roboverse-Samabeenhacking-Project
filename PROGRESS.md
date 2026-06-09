@@ -10,8 +10,9 @@
 | P3   | ✅ GREEN | 13 / 99            | de673b8 | reactive avoidance guard |
 | P4   | ✅ GREEN | 7 / 106            | 75f1195 | phase-1 deploy + land in hoop |
 | P5   | ✅ GREEN | 8 / 114            | bc766fd | perception: aruco + detector seam |
-| P6   | ✅ GREEN | 12 / 126           | (this) | shared world model |
-| P7   | TODO   | – / –               | –      | not started |
+| P6   | ✅ GREEN | 12 / 126           | 2973a80 | shared world model |
+| P7   | ✅ GREEN | 9 / 135            | (this) | phase-2 search + lock-on + tag |
+| P8   | TODO   | – / –               | –      | not started |
 
 ## Reference-source note (read once)
 The authoritative `reference/pyhulax_knowledge_base.txt` and `reference/brief/Finals_brief.pdf`
@@ -25,6 +26,20 @@ real sim and the KB) and the vendored `provided_code/` (`UWBParserThread.py`, `d
 signatures — the fake encodes the doc's values.
 
 ## Log
+
+### P7 — Phase 2: search + lock-on + tag  ✅
+Built `src/mission/mission/phase2_search.py`: `lock_and_tag` is a visual servo on the marker's
+pixel offset (camera nadir, image axes == body axes at locked yaw), holds `hold_frames` consecutive
+centred frames then banks the id — bounded by `lock_timeout_s` (no deadlock), `should_stop`-
+interruptible, and it velocity-matches a slow mover. `vantage_patrol` cycles preplanned look-points
+(fly→tilt→dwell-scan, not a lawnmower). `phase2_search` drives the cycle with **bubble-gating**
+(engage only rovers whose projected xy is in the drone's zone — others are logged to the taskboard),
+a **commitment rule** (a started lock runs to completion regardless of the boundary), and a
+**mop-up** endgame (drop the gate in the last cycles). Extended `worker.py` with phase-2 states
+(RELAUNCH/SEARCH/CONVERGE/HOME/DONE) and `run_phase2`. Tests: servo banks a stationary + a moving
+rover, lock is time-boxed and interruptible, bubble-gate logs-but-doesn't-tag out-of-zone, mop-up
+tags it, and **3 drones tag all 5 distinct ids with no double-count, no footprint overfly, ≤0.5 m/s
+throughout** (rover marker xy via `projection.pixel_to_arena`, de-dup via shared `MissionState`).
 
 ### P6 — Shared world model  ✅
 Built `world/mission_state.py` (lock-guarded tagged-id set + evidence, **de-dup by id**),

@@ -27,6 +27,12 @@ class WorkerState(str, Enum):
     GO_TO_PAD = "GO_TO_PAD"
     LAND_HOOP = "LAND_HOOP"
     LANDED = "LANDED"
+    # phase 2
+    RELAUNCH = "RELAUNCH"
+    SEARCH = "SEARCH"
+    CONVERGE = "CONVERGE"
+    HOME = "HOME"
+    DONE = "DONE"
     FAILED = "FAILED"
 
 
@@ -127,3 +133,43 @@ class DroneWorker:
             except Exception:
                 pass
             return False
+
+    # -- phase 2 ---------------------------------------------------------- #
+    def run_phase2(self, vantages, stream, state, taskboard, *, bubble=None,
+                   all_ids=None, home_xy=None, **kwargs) -> set:
+        """RELAUNCH (re-takeoff if landed) → SEARCH (vantage patrol + lock/tag) →
+        HOME. Returns the set of ids this drone banked."""
+        from mission.mission.phase2_search import phase2_search
+
+        cfg = self.cfg
+        lk = _loop_kwargs(cfg)
+        banked: set = set()
+        try:
+            self._set(WorkerState.RELAUNCH)
+            if self.drone.get_altitude() < 30.0:           # was landed after phase 1
+                sdk_compat.prepare_manual_control(self.drone, velocity_level=None)
+                self.drone.takeoff(int(m_to_cm(cfg.speed.cruise_alt_m)))
+
+            self._set(WorkerState.SEARCH)
+            banked = phase2_search(
+                self.drone, self.uwb, self.tag_id, vantages, stream, state, taskboard,
+                bubble=bubble, all_ids=all_ids, guard=self.guard,
+                alt_m=cfg.speed.cruise_alt_m, lock_timeout_s=cfg.failsafe.lock_timeout_s,
+                sleep=self.sleep, on_step=self._on_step, **lk, **kwargs)
+
+            if home_xy is not None:
+                self._set(WorkerState.HOME)
+                fly_to_uwb(self.drone, self.uwb, self.tag_id, home_xy,
+                           alt_m=cfg.speed.cruise_alt_m, tol_m=cfg.speed.arrive_tol_m,
+                           guard=self.guard, sleep=self.sleep,
+                           on_step=self._on_step, **lk)
+            self._set(WorkerState.DONE)
+            return banked
+        except Exception as exc:
+            self.error = repr(exc)
+            self._set(WorkerState.FAILED)
+            try:
+                self.drone.land()
+            except Exception:
+                pass
+            return banked
