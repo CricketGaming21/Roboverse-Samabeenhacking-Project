@@ -7,8 +7,9 @@
 | P0   | ✅ GREEN | 41 / 41            | 54444c9 | fake SDK substrate |
 | P1   | ✅ GREEN | 26 / 67            | 6b12d91 | config + frames + fly_to_uwb |
 | P2   | ✅ GREEN | 19 / 86            | d29f1ec | planner geometry + projection |
-| P3   | ✅ GREEN | 13 / 99            | (this) | reactive avoidance guard |
-| P4   | TODO   | – / –               | –      | not started |
+| P3   | ✅ GREEN | 13 / 99            | de673b8 | reactive avoidance guard |
+| P4   | ✅ GREEN | 7 / 106            | (this) | phase-1 deploy + land in hoop |
+| P5   | TODO   | – / –               | –      | not started |
 
 ## Reference-source note (read once)
 The authoritative `reference/pyhulax_knowledge_base.txt` and `reference/brief/Finals_brief.pdf`
@@ -22,6 +23,17 @@ real sim and the KB) and the vendored `provided_code/` (`UWBParserThread.py`, `d
 signatures — the fake encodes the doc's values.
 
 ## Log
+
+### P4 — Phase 1: deploy + land in hoop  ✅
+Built `src/mission/mission/phase1_land.py` (`assign_pads` brute-forces drone→pad permutations
+minimising total route length with a heavy crossing penalty; `land_in_hoop` centres on UWB to the
+hoop tolerance, gates the descent on footprint-clear column + clear `down` sensor, optionally
+decode-confirms the pad ArUco, then descends only while centred and lands) and
+`src/mission/mission/worker.py` (`DroneWorker` FSM INIT→TAKEOFF→GO_TO_PAD→LAND_HOOP→LANDED, plans
+its route via the visibility graph, records a trace, lands on any exception so one drone never
+freezes the others). Tests: assignment selects the correct 3 valid pads with no crossing; landing
+refuses when the pad sits on a footprint; 3 drones each route + land within `hoop_tol_m=0.15` and
+**no trace point ever enters a raw footprint**.
 
 ### P3 — Reactive avoidance guard + plan-then-guard  ✅
 Built `src/mission/control/avoidance.py`: `ReactiveGuard.filter(cmd_fwd, cmd_right, obstacles, *,
