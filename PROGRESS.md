@@ -9,8 +9,9 @@
 | P2   | ✅ GREEN | 19 / 86            | d29f1ec | planner geometry + projection |
 | P3   | ✅ GREEN | 13 / 99            | de673b8 | reactive avoidance guard |
 | P4   | ✅ GREEN | 7 / 106            | 75f1195 | phase-1 deploy + land in hoop |
-| P5   | ✅ GREEN | 8 / 114            | (this) | perception: aruco + detector seam |
-| P6   | TODO   | – / –               | –      | not started |
+| P5   | ✅ GREEN | 8 / 114            | bc766fd | perception: aruco + detector seam |
+| P6   | ✅ GREEN | 12 / 126           | (this) | shared world model |
+| P7   | TODO   | – / –               | –      | not started |
 
 ## Reference-source note (read once)
 The authoritative `reference/pyhulax_knowledge_base.txt` and `reference/brief/Finals_brief.pdf`
@@ -24,6 +25,18 @@ real sim and the KB) and the vendored `provided_code/` (`UWBParserThread.py`, `d
 signatures — the fake encodes the doc's values.
 
 ## Log
+
+### P6 — Shared world model  ✅
+Built `world/mission_state.py` (lock-guarded tagged-id set + evidence, **de-dup by id**),
+`world/taskboard.py` (`Track` + `Role`/`Assignment`; `see` merges by id and estimates velocity
+from Δ), `world/belief_grid.py` (numpy occupancy over free cells: `observe` collapses + renorms,
+`diffuse` spreads through free neighbours, `spike` injects a sighting, `argmax_region`, and
+`chokepoints` extracts narrow gaps from the crate map), and `world/coordinator.py`
+(`Coordinator.step` TAGs confirmed-untagged rovers with the nearest free drone, SWEEPs the rest
+to the belief argmax, and leaves `busy_locked` drones alone — the P7 commitment hook). All shared
+objects are `threading.Lock`-guarded. Tests cover de-dup, velocity estimation, belief
+collapse/diffuse/spike, chokepoint extraction, and coordinator role logic incl. already-tagged
+and locked-drone cases.
 
 ### P5 — Perception: ArUco + detector seam + two-stage  ✅
 Built `src/mission/perception/detector.py` (`Detection` dataclass, `RoverDetector` ABC,
