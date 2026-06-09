@@ -217,7 +217,8 @@ def build(client: int, cfg, layout) -> WorldBodies:
                         _RGBA["drone"])
         for pose in layout.drone_starts)
 
-    marker_ids = list(cfg.rovers.marker_ids)
+    from .rover_model import resolved_marker_ids
+    marker_ids = resolved_marker_ids(cfg)   # mixed mode = auto + evasive blocks
     n_rovers = len(layout.rover_starts)
     if len(marker_ids) < n_rovers:
         raise ValueError(f"rovers.marker_ids has {len(marker_ids)} ids for "

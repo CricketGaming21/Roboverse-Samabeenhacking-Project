@@ -326,13 +326,47 @@ class PatrolConfig:
 
 
 @dataclass
+class EvasiveConfig:
+    """The 2 opponent-style rovers (rovers.motion: mixed). They model the
+    HUMAN-TELEOPERATED opponents: when the nearest drone is within
+    flee_radius_m they FLEE, prefer headings that keep a crate between
+    themselves and the pursuer (cover_bias, using the arena footprints), and
+    inject randomized jukes (juke_prob). Intentionally UN-smooth — distinct
+    from the smooth (Phase-28) autonomous rovers. All values PROVISIONAL (no
+    confirmed opponent behaviour yet); deterministic per meta.seed."""
+    speed_mps: float = 0.35           # PROVISIONAL cruise (RoboMaster, not the HULA cap)
+    flee_radius_m: float = 1.8        # PROVISIONAL: react when a drone is this close
+    flee_gain: float = 1.0            # how hard it commits to the away-direction
+    cover_bias: float = 1.0           # preference for keeping a crate between it and the pursuer
+    juke_prob: float = 0.15           # per-decision chance of a random heading juke
+    turn_rate_dps: float = 240.0      # fast/jerky turns (un-smooth, unlike the autonomous rovers)
+    decision_period_s: float = 0.5    # how often it re-decides heading/jukes
+    teleop_index: int = 0             # which evasive rover the teleop hook drives (0 = first evasive)
+    teleop_timeout_s: float = 1.0     # teleop drive frames older than this read as zero
+
+
+@dataclass
+class MixedConfig:
+    """rovers.motion: mixed — 3 AUTONOMOUS (smooth, Phase-28) + 2 EVASIVE.
+    The autonomous rovers run auto_motion (convoy|patrol) with the smooth
+    rate-limited turning; the evasive rovers run the adversarial model above.
+    Marker ids come in two blocks (auto + evasive); count must equal their
+    total. All PROVISIONAL until the organisers confirm."""
+    auto_motion: str = "convoy"       # autonomous rovers' motion (convoy|patrol), smooth
+    auto_ids: list = field(default_factory=lambda: [20, 21, 22])
+    evasive_ids: list = field(default_factory=lambda: [30, 31])
+    evasive: EvasiveConfig = field(default_factory=EvasiveConfig)
+
+
+@dataclass
 class RoversConfig:
     count: int = 5
     marker_ids: list = field(default_factory=lambda: [20, 21, 22, 23, 24])
     billboard_texture: str = "assets/robomaster.png"
-    motion: str = "convoy"            # convoy (fixed routes, DEFAULT) | patrol (random, back-compat)
+    motion: str = "convoy"            # convoy (fixed routes, DEFAULT) | patrol (random) | mixed (3 auto + 2 evasive)
     convoy: ConvoyConfig = field(default_factory=ConvoyConfig)
     patrol: PatrolConfig = field(default_factory=PatrolConfig)
+    mixed: MixedConfig = field(default_factory=MixedConfig)
 
 
 @dataclass

@@ -137,15 +137,15 @@ class Scenario:
     def _enter_ambush(self, now: float, reason: str) -> None:
         self.phase = AMBUSH
         self.ambush_started_at = now
-        convoy = self._reg.config.rovers.motion == "convoy"
         entrance_e = float(self._cfg.entrance[1])
         for i, rover in enumerate(self._reg.rovers):
-            if convoy and rover.in_arena:
+            if rover.enters_from_entrance and rover.in_arena:
                 # phases=ambush boots skip DEPLOY parking — stage off-map
-                # anyway so the convoy still ENTERS from the entrance.
+                # anyway so the convoy still ENTERS from the entrance. Evasive
+                # / patrol rovers enter at their spawn instead.
                 rover.park_offmap(_STAGE_NORTH0_M - i * _STAGE_PITCH_M,
                                   entrance_e)
-            rover.activate(now)  # convoy: arm staggered entry; patrol: enter
+            rover.activate(now)  # convoy: arm staggered entry; patrol/evasive: enter
         self._log.info(
             "phase AMBUSH at t=%.1fs (%s): %d rovers (%s) active for %.0fs",
             now, reason, len(self._reg.rovers),

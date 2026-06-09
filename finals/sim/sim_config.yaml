@@ -198,6 +198,7 @@ rovers:
   billboard_texture: assets/robomaster.png  # visual realism (detection uses the marker)
   motion: convoy           # convoy (fixed scenario routes, DEFAULT)
                            # | patrol (random waypoints — back-compat flag)
+                           # | mixed (3 autonomous + 2 evasive; see rovers.mixed)
   # Convoy (matches the Phase-2 image): enter from scenario.entrance (SW)
   # staggered, run the shared trunk, split to per-rover winding branches,
   # then loiter. FIXED routes only — no evasion, no reacting to drones.
@@ -230,6 +231,24 @@ rovers:
     waypoint_pause_s: 1.0
     bounds_north: [1.0, 9.0]         # keep rovers off the walls
     bounds_east: [1.0, 5.0]
+  # Mixed convoy (motion: mixed): 3 AUTONOMOUS (smooth, Phase-28) + 2 EVASIVE.
+  # The evasive pair models the human-teleoperated opponents — separate id
+  # block [30,31]. count must equal len(auto_ids)+len(evasive_ids). All
+  # PROVISIONAL until the organisers confirm.
+  mixed:
+    auto_motion: convoy              # autonomous rovers' motion (convoy|patrol), smooth
+    auto_ids: [20, 21, 22]           # the 3 smooth autonomous rovers
+    evasive_ids: [30, 31]            # the 2 adversarial rovers (separate block)
+    evasive:
+      speed_mps: 0.35                # PROVISIONAL evasive cruise
+      flee_radius_m: 1.8             # react when a drone is this close
+      flee_gain: 1.0                 # commitment to the away-direction
+      cover_bias: 1.0                # keep a crate between itself and the pursuer
+      juke_prob: 0.15                # per-decision random heading juke chance
+      turn_rate_dps: 240.0           # fast/jerky turns (un-smooth on purpose)
+      decision_period_s: 0.5         # heading/juke re-decide interval
+      teleop_index: 0                # which evasive rover the teleop hook drives
+      teleop_timeout_s: 1.0          # teleop frames older than this read as zero
 
 # --- Scoring (two referees, sim-side) ----------------------------------------
 # Part 1 (DEPLOY): landing accuracy. Part 2 (AMBUSH): rover snapshots only —

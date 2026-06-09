@@ -313,14 +313,17 @@ class SimRegistry:
                 zip(cfg.drones.units, self.layout.drone_starts,
                     self.bodies.drones))
         ]
+        rover_ids = rover_model.resolved_marker_ids(cfg)
         self.rovers = [
             rover_model.SimRover(
-                cfg=cfg, index=i, marker_id=cfg.rovers.marker_ids[i],
+                cfg=cfg, index=i, marker_id=rover_ids[i],
                 body_id=bid, client=self.client, clock=self.clock,
                 start_pose=pose, obstacles=self.layout.obstacles)
             for i, (pose, bid) in enumerate(
                 zip(self.layout.rover_starts, self.bodies.rovers))
         ]
+        for r in self.rovers:             # evasive rovers flee the nearest drone
+            r.bind_drones(self.drones)
         self.scenario = scenario.Scenario(self)
         self.scenario.on_boot()
         self._log.info(

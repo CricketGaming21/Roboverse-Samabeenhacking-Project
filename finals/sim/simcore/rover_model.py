@@ -1,19 +1,20 @@
-"""Rover agents: convoy routing / random patrol + unique top ArUco markers.
+"""Rover agents: convoy routing / random patrol / mixed (auto + evasive) +
+unique top ArUco markers.
 
 Simulator INTERNAL — mission code must never import simcore.
 
-NOT mission logic: rovers are world actors the mission has to find. They
-follow FIXED configured routes — no evasion, no reacting to drones. Motion
-is advanced on the SIM THREAD only (step(dt) from the registry loop).
+NOT mission logic: rovers are world actors the mission has to find. Motion is
+advanced on the SIM THREAD only (step(dt) from the registry loop).
 
-TWO MOTION MODES (config rovers.motion):
-- "convoy" (DEFAULT, matches the Phase-2 image): in AMBUSH the rovers enter
-  one by one from scenario.entrance (staggered entry_stagger_s apart, a
-  convoy column), follow the shared trunk to split_index, then each follows
-  its own authored branch, then loiters (loop the branch | hold at the end).
-  Purely config-driven and deterministic — no RNG anywhere.
-- "patrol" (back-compat flag): the original seeded waypoint_random wander
-  within patrol bounds. speed_mps = 0 parks the rovers (handy for tests).
+MOTION MODES (config rovers.motion):
+- "convoy" (DEFAULT): staggered SW entry, shared trunk, per-rover authored
+  branch, loiter — smooth, rate-limited turning (Phase 28). No reacting to drones.
+- "patrol" (back-compat): seeded waypoint_random wander. speed_mps = 0 parks them.
+- "mixed": 3 AUTONOMOUS rovers (auto_motion, smooth) carrying ids [20,21,22],
+  plus 2 EVASIVE rovers carrying a separate id block [30,31]. The evasive pair
+  models the human-teleoperated opponents: flee a nearby drone, seek crate
+  cover, and juke (intentionally UN-smooth). One evasive rover can be
+  human-driven via the SSH-safe teleop hook (set_teleop / scripts.rover_teleop).
 """
 
 import math
@@ -27,9 +28,62 @@ _WAYPOINT_TRIES = 50
 _OBSTACLE_CLEAR_M = 0.3   # keep the path this far from obstacle footprints
 _SEGMENT_STEP_M = 0.2     # sampling pitch of the straight-path clearance check
 
-_MOTION_MODES = ("convoy", "patrol")
+_MOTION_MODES = ("convoy", "patrol", "mixed")
+_PERSONALITIES = ("convoy", "patrol", "evasive")
 _LOITER_MODES = ("loop", "hold")
 _HOLD_BRAKE_M = 0.6       # loiter=hold: ease to a stop over this final distance
+
+_ROVER_RADIUS_M = 0.2     # footprint radius for bounds / crate avoidance
+_COVER_LOOKAHEAD_M = 1.0  # how far ahead the cover-seeking score peeks
+
+
+# --------------------------------------------------------------------------- #
+# Per-mode resolution (shared by world.py + registry.py)
+# --------------------------------------------------------------------------- #
+
+def resolved_marker_ids(cfg) -> list:
+    """The per-rover ArUco marker ids for the configured motion mode. Mixed
+    mode uses the two id blocks (autonomous + evasive) in order; otherwise
+    rovers.marker_ids."""
+    r = cfg.rovers
+    if r.motion == "mixed":
+        return [int(i) for i in (list(r.mixed.auto_ids)
+                                 + list(r.mixed.evasive_ids))]
+    return [int(i) for i in r.marker_ids]
+
+
+def personality_for(cfg, index: int) -> str:
+    """Behaviour for rover `index`: convoy | patrol | evasive. Mixed = the
+    autonomous motion for the first len(auto_ids), then evasive."""
+    r = cfg.rovers
+    if r.motion == "mixed":
+        n_auto = len(r.mixed.auto_ids)
+        return r.mixed.auto_motion if index < n_auto else "evasive"
+    return r.motion
+
+
+def keys_to_rover_drive(keys, speed: float = 1.0):
+    """Map held keys -> (v_north, v_east) for the teleop hook. Arena frame:
+    W=+north, S=-north, A=-east, D=+east; opposing keys cancel; magnitude is
+    clamped to `speed`. PURE function — headless/SSH-friendly, no window."""
+    ks = {str(k).lower() for k in keys}
+    vn = (1.0 if "w" in ks else 0.0) - (1.0 if "s" in ks else 0.0)
+    ve = (1.0 if "d" in ks else 0.0) - (1.0 if "a" in ks else 0.0)
+    norm = math.hypot(vn, ve)
+    if norm > 1.0:
+        vn, ve = vn / norm, ve / norm
+    return (vn * speed, ve * speed)
+
+
+def _point_segment_dist(px, py, ax, ay, bx, by) -> float:
+    """Distance from point (px,py) to segment (a)->(b)."""
+    abx, aby = bx - ax, by - ay
+    denom = abx * abx + aby * aby
+    if denom <= 1e-12:
+        return math.hypot(px - ax, py - ay)
+    t = ((px - ax) * abx + (py - ay) * aby) / denom
+    t = max(0.0, min(1.0, t))
+    return math.hypot(px - (ax + t * abx), py - (ay + t * aby))
 
 
 def convoy_route(cfg, rover_index: int):
@@ -51,7 +105,7 @@ def convoy_route(cfg, rover_index: int):
 
 
 class SimRover:
-    """State + patrol motion for one rover (sim-thread only mutation)."""
+    """State + motion for one rover (sim-thread only mutation)."""
 
     def __init__(self, cfg, index, marker_id, body_id, client, clock,
                  start_pose, obstacles):
@@ -70,6 +124,7 @@ class SimRover:
         self._bounds_n = tuple(pat.bounds_north)
         self._bounds_e = tuple(pat.bounds_east)
         self._obstacles = obstacles       # layout.obstacles (arena frame)
+        self._ground_obstacles = [o for o in obstacles if o.z0_m == 0.0]
         self._rng = np.random.default_rng([cfg.meta.seed, 3000 + index])
 
         wx, wy, _ = frames.arena_to_world(cfg, start_pose.north,
@@ -84,11 +139,21 @@ class SimRover:
         self._spawn_pos = self.pos.copy()
         self._spawn_yaw = self.yaw
 
-        # Convoy mode (rovers.motion: convoy): fixed authored route.
         self._motion = cfg.rovers.motion
         if self._motion not in _MOTION_MODES:
             raise ValueError(f"unknown rovers.motion: {self._motion!r}")
-        if self._motion == "convoy":
+        self._personality = personality_for(cfg, index)
+        if self._personality not in _PERSONALITIES:
+            raise ValueError(f"unknown rover personality: "
+                             f"{self._personality!r}")
+        # Only convoy-personality rovers enter from the SW entrance; patrol /
+        # evasive rovers enter at their layout spawn.
+        self.enters_from_entrance = self._personality == "convoy"
+        self._drones = []                 # bound by the registry (evasive flee)
+        self._teleop = None               # (v_north, v_east) m/s, or None
+        self._teleop_until = 0.0
+
+        if self._personality == "convoy":
             cv = cfg.rovers.convoy
             if cv.loiter not in _LOITER_MODES:
                 raise ValueError(f"unknown rovers.convoy.loiter: "
@@ -103,10 +168,30 @@ class SimRover:
             self._loiter = cv.loiter
             self._entry_time = None   # sim time this rover enters (staggered)
             self._wp_i = 0            # current route waypoint (None = holding)
+        elif self._personality == "evasive":
+            ev = cfg.rovers.mixed.evasive
+            self._ev_speed = float(ev.speed_mps)
+            self._flee_radius = float(ev.flee_radius_m)
+            self._flee_gain = float(ev.flee_gain)
+            self._cover_bias = float(ev.cover_bias)
+            self._juke_prob = float(ev.juke_prob)
+            self._ev_turn_rate = math.radians(float(ev.turn_rate_dps))
+            self._ev_decision_period = float(ev.decision_period_s)
+            self._ev_teleop_timeout = float(ev.teleop_timeout_s)
+            self._next_decision = 0.0
+            self._juke = False
+            self._juke_angle = 0.0
+            self._ev_target = None    # arena (n, e) roam target
 
     def arena_position(self):
         """TRUE (north, east) metres."""
         return frames.world_to_arena(self.cfg, self.pos[0], self.pos[1])
+
+    def bind_drones(self, drones) -> None:
+        """Give the rover a reference to the drone list (read on the sim
+        thread) so an evasive rover can find the nearest pursuer. No-op for
+        the other personalities."""
+        self._drones = drones
 
     # ------------------------------------------------------------------ #
     # Scenario staging — SIM THREAD ONLY (called by simcore/scenario.py)
@@ -122,16 +207,17 @@ class SimRover:
 
     def activate(self, now: float) -> None:
         """AMBUSH begins (called by the scenario). Convoy: arm the staggered
-        entry (rover k enters k * entry_stagger_s after now). Patrol
-        (back-compat): the old teleport-to-spawn."""
-        if self._motion == "convoy":
+        entry. Patrol / evasive: enter the arena at the layout spawn."""
+        if self._personality == "convoy":
             self._entry_time = (now + self.index
                                 * float(self.cfg.rovers.convoy.entry_stagger_s))
         else:
             self.enter_arena()
+            if self._personality == "evasive":
+                self._next_decision = now  # decide a heading immediately
 
     def enter_arena(self) -> None:
-        """Teleport to the layout spawn (patrol mode's AMBUSH entry)."""
+        """Teleport to the layout spawn (patrol / evasive AMBUSH entry)."""
         self.in_arena = True
         self.pos = self._spawn_pos.copy()
         self.yaw = self._spawn_yaw
@@ -150,9 +236,13 @@ class SimRover:
     # ------------------------------------------------------------------ #
 
     def step(self, dt: float) -> None:
-        if self._motion == "convoy":
+        if self._personality == "convoy":
             self._step_convoy(dt)
             return
+        if self._personality == "evasive":
+            self._step_evasive(dt)
+            return
+        # patrol
         if not self.in_arena:
             return  # staged off-map (DEPLOY): inert by definition
         if self._speed <= 0.0:
@@ -227,19 +317,158 @@ class SimRover:
             self.pos[:2] += delta * (step_len / dist)
         # Rate-limited heading: ease the body toward the travel direction so
         # corners and the loop seam are smooth turns, never an instant spin.
-        self._turn_toward(math.atan2(delta[1], delta[0]), dt)
+        self._turn_toward(math.atan2(delta[1], delta[0]), dt, self._turn_rate)
         self._mirror()
 
-    def _turn_toward(self, target_yaw: float, dt: float) -> None:
+    def _turn_toward(self, target_yaw: float, dt: float, rate: float) -> None:
         d = (target_yaw - self.yaw + math.pi) % (2 * math.pi) - math.pi
-        step = self._turn_rate * dt
+        step = rate * dt
         self.yaw += d if abs(d) <= step else math.copysign(step, d)
+
+    # ------------------------------------------------------------------ #
+    # Evasive driving (adversarial: flee + cover-seek + juke; un-smooth)
+    # ------------------------------------------------------------------ #
+
+    def set_teleop(self, v_north: float, v_east: float) -> None:
+        """Headless teleop drive for this (evasive) rover — arena-frame m/s,
+        fresh for teleop_timeout_s. Set by the SSH stdin hook or the dashboard;
+        SIM THREAD ONLY. No window anywhere."""
+        self._teleop = (float(v_north), float(v_east))
+        self._teleop_until = self._clock.now() + self._ev_teleop_timeout
+
+    def teleop_active(self, now=None) -> bool:
+        now = self._clock.now() if now is None else now
+        return self._teleop is not None and now <= self._teleop_until
+
+    def _step_evasive(self, dt: float) -> None:
+        if not self.in_arena:
+            return
+        now = self._clock.now()
+        n0, e0 = self.arena_position()
+        if self.teleop_active(now):
+            vn, ve = self._teleop              # human drive (arena m/s)
+        else:
+            dn, de = self._evasive_direction(now, n0, e0)
+            vn, ve = dn * self._ev_speed, de * self._ev_speed
+        # integrate in arena frame, clamped to bounds + crate-avoiding (slide)
+        n1 = self._clamp_n(n0 + vn * dt)
+        e1 = self._clamp_e(e0 + ve * dt)
+        if self._hits_crate(n1, e1):
+            if not self._hits_crate(n1, e0):       # slide along north
+                e1 = e0
+            elif not self._hits_crate(n0, e1):     # slide along east
+                n1 = n0
+            else:
+                n1, e1 = n0, e0                     # boxed in: hold
+        wx, wy, _ = frames.arena_to_world(self.cfg, n1, e1, 0.0)
+        delta_x, delta_y = wx - self.pos[0], wy - self.pos[1]
+        self.pos[0], self.pos[1] = wx, wy
+        # jerky heading: rate-limited at the FAST evasive turn rate (jukes make
+        # it change abruptly — intentionally un-smooth, unlike the autonomous).
+        if abs(delta_x) > 1e-6 or abs(delta_y) > 1e-6:
+            self._turn_toward(math.atan2(delta_y, delta_x), dt,
+                              self._ev_turn_rate)
+        self._mirror()
+
+    def _evasive_direction(self, now, n0, e0):
+        """Unit arena (north, east) heading: flee the nearest drone (cover-
+        seeking) when close, else roam; with periodic random jukes."""
+        if now >= self._next_decision:
+            self._next_decision = now + self._ev_decision_period
+            self._juke = bool(self._rng.random() < self._juke_prob)
+            self._juke_angle = float(self._rng.uniform(-math.pi / 2,
+                                                       math.pi / 2))
+        drone_ne, dist = self._nearest_drone(n0, e0)
+        if drone_ne is not None and dist <= self._flee_radius:
+            dn, de = self._flee_direction(n0, e0, drone_ne)
+        else:
+            dn, de = self._roam_direction(now, n0, e0)
+        if self._juke and (dn or de):              # inject a random heading juke
+            c, s = math.cos(self._juke_angle), math.sin(self._juke_angle)
+            dn, de = c * dn - s * de, s * dn + c * de
+        return dn, de
+
+    def _nearest_drone(self, n0, e0):
+        best, best_d = None, float("inf")
+        for d in self._drones:
+            if not getattr(d, "flying", False):
+                continue
+            dn_, de_ = frames.world_to_arena(self.cfg, d.pos[0], d.pos[1])
+            dist = math.hypot(dn_ - n0, de_ - e0)
+            if dist < best_d:
+                best, best_d = (dn_, de_), dist
+        return best, best_d
+
+    def _flee_direction(self, n0, e0, drone_ne):
+        away_n, away_e = n0 - drone_ne[0], e0 - drone_ne[1]
+        norm = math.hypot(away_n, away_e) or 1.0
+        away = (away_n / norm, away_e / norm)
+        if self._cover_bias <= 0.0:
+            return away
+        # Among candidate headings around the away-direction, prefer the one
+        # that keeps a crate between the rover's next position and the drone
+        # (cover_bias) while still fleeing (flee_gain).
+        best_dir, best_score = away, -1e18
+        for ang in (-1.2, -0.6, 0.0, 0.6, 1.2):
+            c, s = math.cos(ang), math.sin(ang)
+            d = (c * away[0] - s * away[1], s * away[0] + c * away[1])
+            look = (n0 + d[0] * _COVER_LOOKAHEAD_M,
+                    e0 + d[1] * _COVER_LOOKAHEAD_M)
+            shadow = self._cover_score(look, drone_ne)
+            align = d[0] * away[0] + d[1] * away[1]   # stay near the away dir
+            score = self._flee_gain * align + self._cover_bias * shadow
+            if score > best_score:
+                best_score, best_dir = score, d
+        return best_dir
+
+    def _cover_score(self, look, drone_ne) -> float:
+        """How shadowed a lookahead point is: 1 when a crate sits on the
+        segment lookahead->drone, fading to 0 at its edge."""
+        best = 0.0
+        for o in self._ground_obstacles:
+            d = _point_segment_dist(o.north, o.east, look[0], look[1],
+                                    drone_ne[0], drone_ne[1])
+            reach = max(o.half_n, o.half_e) + _ROVER_RADIUS_M
+            if d < reach:
+                best = max(best, 1.0 - d / reach)
+        return best
+
+    def _roam_direction(self, now, n0, e0):
+        if self._ev_target is None or math.hypot(
+                self._ev_target[0] - n0, self._ev_target[1] - e0) < 0.4:
+            self._ev_target = self._pick_roam_target(n0, e0)
+        if self._ev_target is None:
+            return (0.0, 0.0)
+        dn, de = self._ev_target[0] - n0, self._ev_target[1] - e0
+        norm = math.hypot(dn, de) or 1.0
+        return (dn / norm, de / norm)
+
+    def _pick_roam_target(self, n0, e0):
+        for _ in range(_WAYPOINT_TRIES):
+            n = float(self._rng.uniform(*self._bounds_n))
+            e = float(self._rng.uniform(*self._bounds_e))
+            if self._segment_clear(n0, e0, n, e):
+                return (n, e)
+        return None
+
+    def _clamp_n(self, n):
+        lo, hi = _ROVER_RADIUS_M, self.cfg.arena.length_m - _ROVER_RADIUS_M
+        return max(lo, min(hi, n))
+
+    def _clamp_e(self, e):
+        lo, hi = _ROVER_RADIUS_M, self.cfg.arena.width_m - _ROVER_RADIUS_M
+        return max(lo, min(hi, e))
+
+    def _hits_crate(self, n, e) -> bool:
+        return any(arena.point_rect_dist_m(n, e, o.north, o.east, o.half_n,
+                                           o.half_e) < _ROVER_RADIUS_M
+                   for o in self._ground_obstacles)
 
     # ------------------------------------------------------------------ #
     # Waypoint sampling (patrol mode)
     # ------------------------------------------------------------------ #
 
-    def _pick_waypoint(self, now: float):
+    def _pick_waypoint(self, now):
         cur_n, cur_e = self.arena_position()
         for _ in range(_WAYPOINT_TRIES):
             n = self._rng.uniform(*self._bounds_n)
