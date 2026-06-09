@@ -188,6 +188,8 @@ rovers:
   convoy:
     entry_stagger_s: 4.0   # gap between successive rovers entering
     speed_mps: 0.25        # slow, deliberate crawl
+    turn_rate_dps: 70.0    # max heading turn rate: eases around corners and
+                           # the loop seam so the rover never spins/snaps
     trunk: [[1.0, 0.8], [2.5, 1.5], [4.0, 2.0]]  # shared path from the entrance
     split_index: 2         # after this trunk waypoint each rover branches
     # Long WINDING LOOPS traced from the reference image (loiter=loop cycles
@@ -256,6 +258,9 @@ record:
   show_camera_insets: true # composite per-drone feeds into the frame (Phase 23)
   show_telemetry: true     # per-drone telemetry panel below its feed (Phase 25)
   show_proximity: true     # per-drone car-style boolean proximity graphic
+  inset_render_h: 720      # internal camera-inset render height (4:3) so the
+                           # detect/acquire boxes are crisp; --hq sets the
+                           # whole frame to 1920x1080
 
 # --- Logging -----------------------------------------------------------------
 logging:

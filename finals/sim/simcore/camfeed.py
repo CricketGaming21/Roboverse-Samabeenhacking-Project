@@ -21,10 +21,51 @@ from .log import get_logger
 
 
 # Acquisition-UI colours (BGR): a marker the camera DETECTS (decodable) vs
-# one the referee has ACQUIRED (scored). Consistent with the cockpit key.
-_DETECTED = (0, 255, 255)   # yellow
-_ACQUIRED = (60, 220, 80)   # green
+# one the referee has ACQUIRED (scored). HIGH-CONTRAST and bright so the box
+# is unmissable at any record size.
+_DETECTED = (0, 255, 255)   # bright yellow
+_ACQUIRED = (0, 255, 0)     # bright green
 _FLASH = (255, 255, 255)    # brief highlight on the first bank
+_BOX_MIN_THICK = 3          # never thinner than this, even on small frames
+
+
+def box_thickness(frame_w: int) -> int:
+    """Outline thickness scaled to the frame width — bold at any resolution
+    (>= _BOX_MIN_THICK)."""
+    return max(_BOX_MIN_THICK, int(round(frame_w / 220.0)))
+
+
+def draw_acquisition_box(img, marker_id, pts, acquired, flash=False):
+    """Draw ONE high-visibility detect/acquire box on a BGR frame: a thick
+    bright outline (yellow DETECTED / green ACQUIRED) + a large id label on a
+    semi-opaque dark pill so it is legible against any background."""
+    h, w = img.shape[:2]
+    color = _ACQUIRED if acquired else _DETECTED
+    thick = box_thickness(w) + (2 if flash else 0)
+    ipts = pts.astype(np.int32)
+    cv2.polylines(img, [ipts], True, color, thick, cv2.LINE_AA)
+    if flash:  # first-bank highlight: a bright ring around the marker
+        cv2.rectangle(img, (int(ipts[:, 0].min()) - 5, int(ipts[:, 1].min()) - 5),
+                      (int(ipts[:, 0].max()) + 5, int(ipts[:, 1].max()) + 5),
+                      _FLASH, 2, cv2.LINE_AA)
+    # label on a semi-opaque pill, just above the marker
+    label = f"{'ACQUIRED' if acquired else 'DETECTED'} id {marker_id}"
+    fs = max(0.5, w / 1100.0)
+    (tw, th), base = cv2.getTextSize(label, cv2.FONT_HERSHEY_SIMPLEX, fs, 2)
+    lx = int(max(2, min(ipts[:, 0].min(), w - tw - 6)))
+    ly = int(ipts[:, 1].min()) - 8
+    if ly - th - 4 < 0:                 # no room above -> below the marker
+        ly = int(ipts[:, 1].max()) + th + 10
+    x0, y0 = lx - 4, ly - th - 4
+    x1, y1 = lx + tw + 4, ly + base + 2
+    x0, y0 = max(0, x0), max(0, y0)
+    x1, y1 = min(w, x1), min(h, y1)
+    roi = img[y0:y1, x0:x1]
+    if roi.size:                        # semi-opaque dark pill behind the text
+        dark = np.zeros_like(roi)
+        cv2.addWeighted(dark, 0.55, roi, 0.45, 0.0, roi)
+    cv2.putText(img, label, (lx, ly), cv2.FONT_HERSHEY_SIMPLEX, fs, color, 2,
+                cv2.LINE_AA)
 
 
 def detect_markers(cfg, bgr: np.ndarray):
@@ -66,20 +107,8 @@ def acquisition_overlay(cfg, bgr: np.ndarray, banked_ids=(), flash_ids=()):
     found = detect_markers(cfg, bgr)
     banked, flash = set(banked_ids), set(flash_ids)
     for mid, pts in found:
-        acquired = mid in banked
-        color = _ACQUIRED if acquired else _DETECTED
-        ipts = pts.astype(np.int32)
-        flashing = mid in flash
-        cv2.polylines(out, [ipts], True, color, 3 if flashing else 2)
-        label = f"{'ACQUIRED' if acquired else 'DETECTED'} id {mid}"
-        x0, y0 = int(ipts[:, 0].min()), int(ipts[:, 1].min())
-        cv2.putText(out, label, (x0, max(y0 - 6, 12)),
-                    cv2.FONT_HERSHEY_SIMPLEX, 0.45, color, 1, cv2.LINE_AA)
-        if flashing:  # first-bank flash: a bright box around the marker
-            cv2.rectangle(out, (int(ipts[:, 0].min()) - 4,
-                               int(ipts[:, 1].min()) - 4),
-                          (int(ipts[:, 0].max()) + 4,
-                           int(ipts[:, 1].max()) + 4), _FLASH, 2)
+        draw_acquisition_box(out, mid, pts, acquired=mid in banked,
+                             flash=mid in flash)
     return out, found
 
 

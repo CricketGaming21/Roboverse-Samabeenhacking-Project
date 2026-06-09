@@ -122,16 +122,19 @@ class SimRegistry:
         d = self.drones[index]
         return self.run_on_sim_thread(lambda: (tuple(d.pos), float(d.yaw)))
 
-    def render_camera(self, drone):
+    def render_camera(self, drone, width=None, height=None):
         """One (H, W, 3) uint8 RGB frame from a drone's tiltable camera,
         rendered on the sim thread with the active renderer (EGL or Tiny).
-        Returns None when cameras are disabled (live-3D mode) — no
-        getCameraImage, so it cannot freeze a p.GUI window."""
+        width/height override the resolution (same camera FOV/pose) so the
+        recorder can render crisp HIGH-RES insets while the referee keeps the
+        default AI-mode 640x480. Returns None when cameras are disabled
+        (live-3D mode) — no getCameraImage, so it cannot freeze a p.GUI."""
         if not self.cameras_enabled:
             return None
         return self.run_on_sim_thread(
             lambda: camera.render_rgb(self.client, self.config, drone,
-                                      self.renderer),
+                                      self.renderer, width=width,
+                                      height=height),
             timeout=30)
 
     def render_arena(self, width: int = None, height: int = None):

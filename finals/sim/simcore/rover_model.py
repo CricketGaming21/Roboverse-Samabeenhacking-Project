@@ -29,6 +29,7 @@ _SEGMENT_STEP_M = 0.2     # sampling pitch of the straight-path clearance check
 
 _MOTION_MODES = ("convoy", "patrol")
 _LOITER_MODES = ("loop", "hold")
+_HOLD_BRAKE_M = 0.6       # loiter=hold: ease to a stop over this final distance
 
 
 def convoy_route(cfg, rover_index: int):
@@ -93,6 +94,7 @@ class SimRover:
                 raise ValueError(f"unknown rovers.convoy.loiter: "
                                  f"{cv.loiter!r}")
             self._convoy_speed = float(cv.speed_mps)
+            self._turn_rate = math.radians(float(cv.turn_rate_dps))
             waypoints_ne = convoy_route(cfg, index)[1:]  # after the entrance
             self._route_w = [
                 np.array(frames.arena_to_world(cfg, n, e, 0.0)[:2])
@@ -198,27 +200,40 @@ class SimRover:
             self._mirror()
             return
         if self._wp_i is None:
-            return  # loiter: hold at the branch end
+            return  # loiter=hold: eased to a gentle stop at the branch end
         target = self._route_w[self._wp_i]
         self._target_w = target
         delta = target - self.pos[:2]
         dist = float(np.hypot(delta[0], delta[1]))
-        step_len = self._convoy_speed * dt
+        # loiter=hold: ease to a gentle stop over the final approach segment
+        # (no abrupt halt) once on the last waypoint.
+        speed = self._convoy_speed
+        last = self._wp_i == len(self._route_w) - 1
+        if last and self._loiter == "hold":
+            speed = max(0.05, min(speed, speed * dist / _HOLD_BRAKE_M))
+        step_len = speed * dt
         if dist <= step_len:
             self.pos[:2] = target
             nxt = self._wp_i + 1
             if nxt >= len(self._route_w):
                 if self._loiter == "loop":
-                    self._wp_i = self._loop_from  # cycle the branch
+                    self._wp_i = self._loop_from  # seamlessly cycle the branch
                 else:
-                    self._wp_i = None             # hold at the end
+                    self._wp_i = None             # parked at the end
                     self._target_w = None
             else:
                 self._wp_i = nxt
-        else:
+        elif step_len > 0.0:
             self.pos[:2] += delta * (step_len / dist)
-            self.yaw = math.atan2(delta[1], delta[0])
+        # Rate-limited heading: ease the body toward the travel direction so
+        # corners and the loop seam are smooth turns, never an instant spin.
+        self._turn_toward(math.atan2(delta[1], delta[0]), dt)
         self._mirror()
+
+    def _turn_toward(self, target_yaw: float, dt: float) -> None:
+        d = (target_yaw - self.yaw + math.pi) % (2 * math.pi) - math.pi
+        step = self._turn_rate * dt
+        self.yaw += d if abs(d) <= step else math.copysign(step, d)
 
     # ------------------------------------------------------------------ #
     # Waypoint sampling (patrol mode)

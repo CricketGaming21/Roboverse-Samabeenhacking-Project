@@ -57,17 +57,27 @@ def projection_matrix(cfg):
         nearVal=cam.near_m, farVal=cam.far_m)
 
 
-def render_rgb(client, cfg, drone, renderer) -> np.ndarray:
-    """One (H, W, 3) uint8 RGB frame from this drone's camera. SIM THREAD."""
+def render_rgb(client, cfg, drone, renderer, width=None,
+               height=None) -> np.ndarray:
+    """One (H, W, 3) uint8 RGB frame from this drone's camera. SIM THREAD.
+    width/height override the output resolution at the SAME FOV/pose (for
+    crisp high-res insets); they default to the configured AI-mode size."""
     cam = cfg.camera
+    w = int(width if width is not None else cam.width)
+    h = int(height if height is not None else cam.height)
     eye, target, up = frames.camera_eye_target_up(
         cfg, drone.pos, drone.yaw, drone.camera_pitch_deg)
     view = p.computeViewMatrix(eye, target, up)
+    # vertical FOV preserved from the configured camera; aspect from the
+    # requested dims so a higher-res inset shows the SAME view, just crisper.
+    fov_v = 2.0 * math.degrees(math.atan(
+        math.tan(math.radians(cam.h_fov_deg) / 2.0) * cam.height / cam.width))
+    proj = p.computeProjectionMatrixFOV(
+        fov=fov_v, aspect=w / h, nearVal=cam.near_m, farVal=cam.far_m)
     img = p.getCameraImage(
-        cam.width, cam.height, viewMatrix=view,
-        projectionMatrix=projection_matrix(cfg),
+        w, h, viewMatrix=view, projectionMatrix=proj,
         renderer=resolve_renderer(client, renderer),  # GUI -> software
         flags=p.ER_NO_SEGMENTATION_MASK, physicsClientId=client,
         **_LIGHT_KWARGS)
-    rgba = np.asarray(img[2], dtype=np.uint8).reshape(cam.height, cam.width, 4)
+    rgba = np.asarray(img[2], dtype=np.uint8).reshape(h, w, 4)
     return rgba[:, :, :3].copy()

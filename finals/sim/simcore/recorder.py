@@ -233,7 +233,10 @@ class ArenaRecorder:
         tile = np.full((h, w, 3), 40, dtype=np.uint8)
         flying = drone is not None and getattr(drone, "flying", False)
         if flying:
-            rgb = self._reg.render_camera(drone)
+            # render the inset camera at a HIGHER internal resolution (4:3)
+            # so the marker + detect/acquire box stay crisp after downscale.
+            ih = int(self._rc.inset_render_h)
+            rgb = self._reg.render_camera(drone, width=ih * 4 // 3, height=ih)
             if rgb is not None:
                 overlaid, _found = camfeed.acquisition_overlay(
                     self._cfg, cv2.cvtColor(rgb, cv2.COLOR_RGB2BGR),

@@ -77,9 +77,13 @@ def main(argv=None) -> None:
     ap.add_argument("--record", metavar="PATH.mp4", default=None,
                     help="record an offscreen 3D MP4 of the run "
                          "(headless EGL; no GUI window)")
+    ap.add_argument("--hq", action="store_true",
+                    help="high-quality recording at 1920x1080 (heavier)")
     args = ap.parse_args(argv)
 
     cfg = load_config(args.config)
+    if args.hq:
+        cfg.record.width, cfg.record.height = 1920, 1080
     log = get_logger("run_sim", cfg)
     reg = SimRegistry(cfg, gui=args.gui)
     view = TopDownView(reg)

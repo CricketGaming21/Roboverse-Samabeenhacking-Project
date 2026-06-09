@@ -339,11 +339,15 @@ def main(argv=None) -> None:
     ap.add_argument("--record", metavar="PATH.mp4", default=None,
                     help="record an offscreen 3D MP4 of the real run "
                          "(headless EGL; no GUI window)")
+    ap.add_argument("--hq", action="store_true",
+                    help="high-quality recording at 1920x1080 (heavier)")
     args = ap.parse_args(argv)
 
     cfg = load_config()
     if args.rtf:
         cfg.meta.real_time_factor = args.rtf
+    if args.hq:
+        cfg.record.width, cfg.record.height = 1920, 1080
 
     result = run_scenario_demo(cfg, verbose=True, gui=args.gui,
                                live=args.live, debug=args.debug,

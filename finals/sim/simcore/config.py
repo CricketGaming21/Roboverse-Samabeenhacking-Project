@@ -271,6 +271,8 @@ class ConvoyConfig:
     here, never add evasion logic."""
     entry_stagger_s: float = 4.0      # gap between successive rovers entering
     speed_mps: float = 0.25           # slow, deliberate crawl
+    turn_rate_dps: float = 70.0       # max heading turn rate — eases around
+                                      # corners + the loop seam (no spinning)
     trunk: list = field(default_factory=lambda: [
         [1.0, 0.8], [2.5, 1.5], [4.0, 2.0]])
     split_index: int = 2              # after trunk[split_index], branch off
@@ -380,6 +382,9 @@ class RecordConfig:
     show_camera_insets: bool = True   # per-drone feeds (Phase 23)
     show_telemetry: bool = True       # per-drone telemetry panel (Phase 25)
     show_proximity: bool = True       # per-drone car-style proximity graphic
+    inset_render_h: int = 720         # internal camera-inset render height
+                                      # (4:3) — crisp detect/acquire boxes
+                                      # (HQ via --hq -> width/height 1920x1080)
 
 
 @dataclass
