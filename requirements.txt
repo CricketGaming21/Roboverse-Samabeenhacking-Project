@@ -1,0 +1,15 @@
+# --- Mission runtime deps ---
+# pyhulax is provided by the competition / sim. For the OVERNIGHT test run it is
+# NOT required: tests inject a fake `pyhulax` + `UWBParserThread` via sys.modules
+# (see tests/README.md). Install the real/sim pyhulax only for live integration.
+# pyhulax[video]          # provided on the C2 / via the sim repo  (do NOT pip this in CI)
+opencv-contrib-python>=4.7   # cv2.aruco lives in contrib, NOT base opencv-python
+numpy>=1.24
+pyserial>=3.5                # UWBParserThread serial
+pydantic>=2.5                # validated config (reject unknown keys, like the sim)
+PyYAML>=6.0
+# --- Dev / test ---
+pytest>=7.4
+pytest-timeout>=2.1
+# --- OPTIONAL (Phase-2 bonus only; do not install unless training YOLO) ---
+# ultralytics

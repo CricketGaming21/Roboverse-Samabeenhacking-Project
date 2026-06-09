@@ -1,0 +1,39 @@
+# Canonical schema-valid plan fixture (see docs/MISSION_PLAN_SCHEMA.md). The Planner GUI (P9)
+# produces files in this shape; P4/P7 loaders + P9's schema test all depend on it staying valid.
+version: 1
+arena:
+  length_m: 10.0
+  width_m: 6.0
+  crates:
+    - { center: [5.0, 3.0], size: [0.9, 0.9], height_m: 1.2 }
+    - { center: [7.5, 4.2], size: [0.9, 0.45], height_m: 1.0 }
+    - { center: [3.0, 3.5], size: [0.9, 0.45], height_m: 1.1 }
+  inflate_m: 0.40
+drones:
+  - tag_id: 0
+    color: "#e6194b"
+    phase1: { pad_id: 10, route_m: [[0.6,1.1],[3.0,2.0],[6.5,2.8],[8.5,3.0]] }
+    phase2:
+      bubble: [[0.5,0.5],[10.0,0.5],[10.0,2.0],[0.5,2.0]]
+      vantages:
+        - { xy: [3.0,1.2], look_yaw_deg: 0,  gimbal_deg: 60, dwell_s: 2.0 }
+        - { xy: [7.5,1.4], look_yaw_deg: 0,  gimbal_deg: 60, dwell_s: 2.0 }
+  - tag_id: 1
+    color: "#3cb44b"
+    phase1: { pad_id: 11, route_m: [[0.6,0.6],[3.0,3.0],[5.5,4.8]] }
+    phase2:
+      bubble: [[0.5,2.0],[10.0,2.0],[10.0,4.0],[0.5,4.0]]
+      vantages:
+        - { xy: [4.0,3.0], look_yaw_deg: 90, gimbal_deg: 70, dwell_s: 2.0 }
+        - { xy: [8.0,3.2], look_yaw_deg: 90, gimbal_deg: 70, dwell_s: 2.0 }
+  - tag_id: 2
+    color: "#4363d8"
+    phase1: { pad_id: 12, route_m: [[1.1,0.6],[2.0,2.5],[2.0,4.5]] }
+    phase2:
+      bubble: [[0.5,4.0],[10.0,4.0],[10.0,6.0],[0.5,6.0]]
+      vantages:
+        - { xy: [4.6,5.0], look_yaw_deg: 90, gimbal_deg: 70, dwell_s: 2.0 }
+        - { xy: [8.5,5.0], look_yaw_deg: 90, gimbal_deg: 70, dwell_s: 2.0 }
+meta:
+  hoop_tol_m: 0.15
+  cruise_alt_m: 1.10

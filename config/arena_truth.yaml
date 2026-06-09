@@ -1,0 +1,50 @@
+# arena_truth.yaml — GROUND-TRUTH arena data for the MISSION side.
+#
+# Plain data, like the organisers' Discord coordinate file. The mission
+# loads THIS file (yaml.safe_load) — it must NOT import simcore.
+# Regenerate with:  python -m scripts.emit_arena_truth
+#
+# PROVISIONAL: mirrors sim_config.yaml arena.authored, which is a best
+# estimate from the brief images. Replace with the real Discord numbers.
+#
+# Frames: arena (north, east) metres; crate center = footprint centre,
+# size = full footprint [north_m, east_m], height = crate height m.
+arena: {length_m: 10.0, width_m: 6.0, height_m: 3.0}
+crates:
+- center: [5.0, 3.0]
+  size: [0.45, 0.45]
+  height: 0.4
+- center: [5.45, 3.0]
+  size: [0.45, 0.45]
+  height: 0.6
+- center: [5.0, 3.45]
+  size: [0.45, 0.45]
+  height: 0.8
+- center: [4.55, 3.0]
+  size: [0.45, 0.45]
+  height: 1.0
+- center: [5.45, 3.45]
+  size: [0.45, 0.45]
+  height: 1.2
+- center: [7.5, 4.2]
+  size: [0.45, 0.45]
+  height: 0.6
+- center: [7.95, 4.2]
+  size: [0.45, 0.45]
+  height: 1.0
+- center: [4.6, 5.4]
+  size: [0.45, 0.45]
+  height: 0.4
+- center: [5.05, 5.4]
+  size: [0.45, 0.45]
+  height: 0.9
+- center: [3.0, 3.5]
+  size: [0.45, 0.45]
+  height: 0.5
+- center: [3.45, 3.5]
+  size: [0.45, 0.45]
+  height: 1.1
+archway:
+  corner: [9.0, 5.0]
+  width_m: 1.0
+  height_m: 1.2
