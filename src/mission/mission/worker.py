@@ -21,6 +21,14 @@ from mission.runtime import sdk_compat
 Point = Tuple[float, float]
 
 
+class FailsafeAbort(Exception):
+    """Raised mid-flight to trigger a safe return-and-land (battery, etc.)."""
+
+    def __init__(self, reason: str):
+        self.reason = reason
+        super().__init__(reason)
+
+
 class WorkerState(str, Enum):
     INIT = "INIT"
     TAKEOFF = "TAKEOFF"
@@ -49,7 +57,8 @@ def _loop_kwargs(cfg) -> dict:
 class DroneWorker:
     def __init__(self, drone, uwb, tag_id: int, cfg, *, guard=None, graph=None,
                  footprints: Optional[Sequence] = None, stream=None,
-                 priority: int = 0, sleep=time.sleep):
+                 priority: int = 0, sleep=time.sleep,
+                 battery_rtl_pct: Optional[int] = None):
         self.drone = drone
         self.uwb = uwb
         self.tag_id = tag_id
@@ -60,10 +69,12 @@ class DroneWorker:
         self.stream = stream
         self.priority = priority
         self.sleep = sleep
+        self.battery_rtl_pct = battery_rtl_pct
         self.state = WorkerState.INIT
         self.history: List[WorkerState] = [WorkerState.INIT]
         self.trace: List[Point] = []
         self.landed_ok = False
+        self.rtl = False
         self.error: Optional[str] = None
 
     # -- helpers ---------------------------------------------------------- #
@@ -73,6 +84,9 @@ class DroneWorker:
 
     def _on_step(self, info: dict) -> None:
         self.trace.append((self.drone.n, self.drone.e))
+        if self.battery_rtl_pct is not None and \
+                self.drone.get_battery() <= self.battery_rtl_pct:
+            raise FailsafeAbort("battery_rtl")        # safe return-and-land
 
     def _current_xy(self) -> Point:
         x, y, _ = self.uwb.get_tag_position(self.tag_id)
@@ -125,6 +139,15 @@ class DroneWorker:
             self.landed_ok = landed
             self._set(WorkerState.LANDED if landed else WorkerState.FAILED)
             return landed
+        except FailsafeAbort as fa:                     # battery/etc → safe return-and-land
+            self.error = fa.reason
+            self.rtl = True
+            self._set(WorkerState.LANDED)
+            try:
+                self.drone.land()
+            except Exception:
+                pass
+            return self.landed_ok
         except Exception as exc:                       # one drone must never freeze others
             self.error = repr(exc)
             self._set(WorkerState.FAILED)
@@ -164,6 +187,15 @@ class DroneWorker:
                            guard=self.guard, sleep=self.sleep,
                            on_step=self._on_step, **lk)
             self._set(WorkerState.DONE)
+            return banked
+        except FailsafeAbort as fa:                     # battery/etc → safe return-and-land
+            self.error = fa.reason
+            self.rtl = True
+            self._set(WorkerState.LANDED)
+            try:
+                self.drone.land()
+            except Exception:
+                pass
             return banked
         except Exception as exc:
             self.error = repr(exc)

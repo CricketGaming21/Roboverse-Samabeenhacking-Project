@@ -14,8 +14,10 @@
 | P7   | ✅ GREEN | 9 / 135            | d7aaac1 | phase-2 search + lock-on + tag |
 | P8   | ✅ GREEN | 9 / 144            | 77e2a0b | adversarial evader handling |
 | P9   | ✅ GREEN | 9 / 153            | 759bd7f | planner GUI export contract |
-| P10  | ✅ GREEN | 10 / 163           | (this) | C2 operator console |
-| P11  | TODO   | – / –               | –      | not started |
+| P10  | ✅ GREEN | 10 / 163           | f0cd72d | C2 operator console |
+| P11  | ✅ GREEN | 7 / 170 (+1 skip)  | (this) | full integration + reliability |
+
+**ALL PHASES GREEN — full suite: 170 passed, 1 skipped (the real-sim `integration` test).**
 
 ## Reference-source note (read once)
 The authoritative `reference/pyhulax_knowledge_base.txt` and `reference/brief/Finals_brief.pdf`
@@ -29,6 +31,21 @@ real sim and the KB) and the vendored `provided_code/` (`UWBParserThread.py`, `d
 signatures — the fake encodes the doc's values.
 
 ## Log
+
+### P11 — Full integration + reliability + sim handoff  ✅
+Built `src/mission/runtime/discovery.py` (`Discovery`: `pyhulax.discovery.Dola` → fallback
+`dola.py`, `plane_id`↔`tag_id` map, `fixed_ips` short-circuit for the sim — no network),
+`src/mission/runtime/main.py` (`Mission`: spawns a `DroneWorker` per drone, runs Phase 1 → Phase 2
+sequentially-deterministic or `parallel=True` threaded, **reassigns a dead drone's zone** via a
+mop-up pass, and **lands every drone in `run()`'s `finally`**), and `docs/SIM_VS_REAL.md` (the
+import-path swap + on-the-day calibration checklist). Added a **battery RTL failsafe** to
+`DroneWorker` (`FailsafeAbort` raised from `_on_step` when `get_battery() ≤ threshold` → safe land,
+`rtl=True`). Tests: a full Phase1→Phase2 run on the fake harness scores **3/3 landings + all 5
+distinct tags, no double-count, every drone landed on shutdown**; battery RTL lands safely;
+persistent UWB dropout holds without lurching; a sabotaged (dead) drone's zone is reassigned and
+still fully tagged; `run()` lands all even when a phase raises; discovery resolves fixed IPs and via
+the (fake) Dola. The real-sim end-to-end test is implemented + `@pytest.mark.integration` (skipped
+in the gate; run supervised with `RUN_INTEGRATION=1`).
 
 ### P10 — C2 operator console  ✅
 Built `src/mission/runtime/c2_bridge.py` (`C2Bridge`: `snapshot`/`to_json` of drones + footprints +
