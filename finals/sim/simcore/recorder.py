@@ -30,6 +30,7 @@ _AMBER = (40, 190, 240)
 _RED = (60, 60, 235)
 _GREY = (170, 170, 170)
 _CAM_H_FRAC = 0.42        # camera feed fraction of a cockpit column
+_FLASH_SECONDS = 1.5      # how long an id's first-bank flash lasts (sim s)
 _PROX_DIRS = (("forward", 0, -1), ("back", 0, 1),   # (flag, dx, dy) on icon
               ("left", -1, 0), ("right", 1, 0))
 
@@ -65,6 +66,10 @@ class ArenaRecorder:
         self._png_dir = None         # set in PNG-fallback mode
         self.frames_written = 0
         self.last_frame = None       # most recent overlaid BGR frame
+        # Acquisition UI state: which ids the referee has banked (acquired),
+        # and a brief flash window on each id's FIRST bank.
+        self._banked_seen = set()
+        self._flash = {}             # marker_id -> sim time first seen banked
         self._stop = threading.Event()
         self._thread = None
 
@@ -91,14 +96,28 @@ class ArenaRecorder:
         canvas[self._arena_h:] = self._cockpit_band()
         return canvas
 
+    def _acquisition_state(self):
+        """(banked_ids, flash_ids) for the acquisition UI; tracks each id's
+        first bank to flash it briefly. SIM-time based."""
+        ref = self._reg.referee
+        banked = set(ref.banked_ids()) if ref is not None else set()
+        now = self._reg.sim_time()
+        for mid in banked - self._banked_seen:   # first time seen banked
+            self._flash[mid] = now
+        self._banked_seen |= banked
+        flash = {mid for mid, t in self._flash.items()
+                 if now - t < _FLASH_SECONDS}
+        return banked, flash
+
     def _cockpit_band(self):
-        """The bottom band: a per-drone COLUMN — camera feed + telemetry
-        panel + car-style proximity graphic. Read-only DebugProbe snapshot
-        feeds the panels (no extra camera renders -> referee_view=False)."""
+        """The bottom band: a per-drone COLUMN — camera feed (with the
+        target-acquisition UI) + telemetry panel + proximity graphic.
+        Read-only DebugProbe snapshot feeds the panels (referee_view=False)."""
         drones = self._reg.drones
         snap = (self._probe.snapshot(referee_view=False)
                 if self._probe is not None else {"drones": []})
         dsnaps = {d["index"]: d for d in snap.get("drones", [])}
+        banked, flash = self._acquisition_state()
         col_w = self._w // 3
         band = np.full((self._band_h, self._w, 3), 30, dtype=np.uint8)
         for i in range(3):
@@ -106,20 +125,35 @@ class ArenaRecorder:
             x1 = self._w if i == 2 else x0 + col_w
             col = self._drone_column(
                 drones[i] if i < len(drones) else None,
-                dsnaps.get(i), x1 - x0)
+                dsnaps.get(i), x1 - x0, banked, flash)
             band[:, x0:x1] = col
             cv2.rectangle(band, (x0, 0), (x1 - 1, self._band_h - 1),
                           (90, 90, 90), 1)
         return band
 
-    def _drone_column(self, drone, dsnap, w):
+    def _drone_column(self, drone, dsnap, w, banked=(), flash=()):
         """One cockpit column: camera tile on top, then telemetry + proximity
         panel below. Robust to a missing/idle drone (placeholder camera)."""
         col = np.full((self._band_h, w, 3), 30, dtype=np.uint8)
-        col[:self._cam_h] = self._drone_tile(drone, w, self._cam_h)
+        col[:self._cam_h] = self._drone_tile(
+            drone, w, self._cam_h, banked, flash, self._status_line(dsnap))
         if self._panel_h:
             col[self._cam_h:] = self._drone_panel(dsnap, w, self._panel_h)
         return col
+
+    def _status_line(self, dsnap):
+        """Compact per-drone status: mode + current goal or stick inputs."""
+        if dsnap is None:
+            return None
+        mode = dsnap.get("mode", "idle")
+        g = dsnap.get("goal")
+        if mode == "manual" and g and "stick" in g:
+            s = g["stick"]
+            return (f"d{dsnap['index']} MANUAL "
+                    f"F{s['forward']:+.1f} R{s['right']:+.1f}")
+        if mode == "blocking" and g:
+            return f"d{dsnap['index']} BLOCKING {g['kind']}"
+        return f"d{dsnap['index']} idle"
 
     def _drone_panel(self, dsnap, w, h):
         """Telemetry text (left) + car-style proximity graphic (right)."""
@@ -191,29 +225,30 @@ class ArenaRecorder:
         cv2.putText(panel, "PROX", (x0 + 4, y0 + 12),
                     cv2.FONT_HERSHEY_SIMPLEX, 0.32, _GREY, 1, cv2.LINE_AA)
 
-    def _drone_tile(self, drone, w, h):
-        """One inset: the drone's annotated live frame, or a placeholder when
-        it isn't flying (DEPLOY pre-takeoff). Never crashes."""
+    def _drone_tile(self, drone, w, h, banked=(), flash=(), status=None):
+        """One inset: the drone's live frame with the target-ACQUISITION UI
+        (yellow DETECTED -> green ACQUIRED boxes, real cv2.aruco), or a
+        placeholder when it isn't flying (DEPLOY pre-takeoff). Never crashes.
+        The label is a compact per-drone status line (mode + goal/sticks)."""
         tile = np.full((h, w, 3), 40, dtype=np.uint8)
         flying = drone is not None and getattr(drone, "flying", False)
         if flying:
             rgb = self._reg.render_camera(drone)
             if rgb is not None:
-                annotated, _found = camfeed.annotate_markers(
-                    self._cfg, cv2.cvtColor(rgb, cv2.COLOR_RGB2BGR))
-                tile = cv2.resize(annotated, (w, h))
-                label = f"drone {drone.index}"
+                overlaid, _found = camfeed.acquisition_overlay(
+                    self._cfg, cv2.cvtColor(rgb, cv2.COLOR_RGB2BGR),
+                    banked_ids=banked, flash_ids=flash)
+                tile = cv2.resize(overlaid, (w, h))
+                label = status or f"d{drone.index}"
             else:
-                label = (f"drone {drone.index}" if drone is not None
-                         else "-") + " (no frame)"
+                label = (status or f"d{drone.index}") + " (no frame)"
         else:
             cv2.putText(tile, "idle (pre-takeoff)", (10, h // 2),
                         cv2.FONT_HERSHEY_SIMPLEX, 0.5, (160, 160, 160), 1)
-            idx = getattr(drone, "index", "-") if drone is not None else "-"
-            label = f"drone {idx}"
+            label = status or (f"d{drone.index}" if drone is not None else "-")
         cv2.rectangle(tile, (0, 0), (w, 20), (0, 0, 0), -1)
-        cv2.putText(tile, label, (6, 15), cv2.FONT_HERSHEY_SIMPLEX, 0.5,
-                    (0, 255, 0), 1)
+        cv2.putText(tile, label, (6, 15), cv2.FONT_HERSHEY_SIMPLEX, 0.45,
+                    _GREEN, 1, cv2.LINE_AA)
         return tile
 
     def _overlay(self, bgr) -> None:
@@ -227,13 +262,27 @@ class ArenaRecorder:
         line2 = (f"P1 landings {landings}   P2 rovers {rovers}   "
                  f"score {landings + rovers}")
         line3 = "ids " + (",".join(str(i) for i in banked) or "-")
-        cv2.rectangle(bgr, (0, 0), (self._w, 86), (0, 0, 0), -1)
+        cv2.rectangle(bgr, (0, 0), (self._w, 110), (0, 0, 0), -1)
         cv2.putText(bgr, line1, (12, 28), cv2.FONT_HERSHEY_SIMPLEX, 0.8,
                     (255, 255, 255), 2)
         cv2.putText(bgr, line2, (12, 56), cv2.FONT_HERSHEY_SIMPLEX, 0.6,
-                    (180, 255, 180), 2)
+                    _GREEN, 2)
         cv2.putText(bgr, line3, (12, 80), cv2.FONT_HERSHEY_SIMPLEX, 0.55,
                     (180, 220, 255), 1)
+        self._draw_legend(bgr, 12, 100)
+
+    def _draw_legend(self, bgr, x, y) -> None:
+        """A compact colour key so the cockpit is self-describing."""
+        items = (("scored", _GREEN), ("detected", (0, 255, 255)),
+                 ("warn", _AMBER), ("blocked", _RED))
+        cv2.putText(bgr, "KEY", (x, y), cv2.FONT_HERSHEY_SIMPLEX, 0.45,
+                    _GREY, 1, cv2.LINE_AA)
+        cx = x + 52
+        for text, color in items:
+            cv2.rectangle(bgr, (cx, y - 9), (cx + 12, y + 1), color, -1)
+            cv2.putText(bgr, text, (cx + 16, y), cv2.FONT_HERSHEY_SIMPLEX,
+                        0.42, _GREY, 1, cv2.LINE_AA)
+            cx += 30 + 9 * len(text)
 
     # ------------------------------------------------------------------ #
     # Writer (mp4v, PNG-sequence fallback)
