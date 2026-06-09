@@ -60,6 +60,15 @@ real one); keep it path-based. Mission code must never import `simcore` or
 Configured drone IPs (sim_config.yaml): `10.0.0.11/.12/.13` with UWB tags
 0/1/2.
 
+**Detection (ArUco vs YOLO):** ArUco is **real in the sim** (`cv2.aruco` on
+rendered frames — the referee scores on it and the mission confirms identity on
+it); **YOLO is mission code** run on the sim's frames (not in `simcore`). See
+[`docs/DETECTION.md`](docs/DETECTION.md) for the split, and
+`mission_examples/rover_detection_example.py` for the runnable seam — a
+two-stage flow (YOLO **placeholder** finds a rover from afar → approach → real
+`cv2.aruco` confirms the id) where you drop in your model:
+`python -m mission_examples.rover_detection_example`.
+
 ## Coordinate frames (the #1 source of bugs — see `simcore/frames.py`)
 
 | Frame | Units | Meaning |
