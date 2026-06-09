@@ -203,11 +203,16 @@ def _track_world(reg, rover_samples, drone_samples, done_evt):
 
 
 def _direct(cfg, reg, done_evt, errors):
-    """The director: part 1 -> wait for AMBUSH -> part 2 -> DONE."""
+    """The director: part 1 -> wait for AMBUSH -> part 2 -> DONE.
+
+    The drone COUNT is a config knob (len(drones.units)); the scripted
+    choreography (pads / observation stations / lock-on targets) supports up to
+    3 drones, so the sim runs the scenario with 1 OR 3 (the 1-vs-3 hedge)."""
     rtf = max(cfg.meta.real_time_factor, 1e-9)
+    n_drones = min(len(cfg.drones.units), len(DEPLOY_PAD_INDEX))
     try:
         part1 = [threading.Thread(target=_fly_deploy, args=(cfg, i, errors),
-                                  daemon=True) for i in range(3)]
+                                  daemon=True) for i in range(n_drones)]
         for t in part1:
             t.start()
         for t in part1:
@@ -219,7 +224,7 @@ def _direct(cfg, reg, done_evt, errors):
         stop = threading.Event()
         part2 = [threading.Thread(target=_fly_observe,
                                   args=(cfg, i, stop, errors), daemon=True)
-                 for i in range(3)]
+                 for i in range(n_drones)]
         for t in part2:
             t.start()
         while reg.scenario.phase != "done" and time.time() < deadline:

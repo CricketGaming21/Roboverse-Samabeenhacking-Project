@@ -87,8 +87,9 @@ class LandingScorer:
                                    float("inf"), now, False)
         else:
             err = math.hypot(north - pad.north, east - pad.east)
+            # Brief: a landing scores iff INSIDE THE HOOP of a chosen valid pad.
             ok = (pad.valid and pad.designated
-                  and err <= self._cfg.tolerance_m
+                  and err <= self._cfg.hoop_radius_m
                   and pad.id not in self._claimed
                   and drone.index not in self._scored)
             result = LandingResult(drone.index, pad.id, pad.valid,
@@ -182,7 +183,11 @@ class Referee:
         if cfg.scoring.mode not in ("auto", "explicit"):
             raise ValueError(f"unknown scoring.mode: {cfg.scoring.mode!r}")
         # Part-2 targets: ROVER markers only — pads never count.
-        self._targets = set(cfg.rovers.marker_ids[:cfg.rovers.count])
+        # Part-2 targets: the ACTUAL per-rover marker ids (mixed mode = both
+        # the autonomous [20,21,22] and evasive [30,31] blocks); pads never
+        # count. Distinct ids across ALL rovers are the score.
+        from . import rover_model
+        self._targets = set(rover_model.resolved_marker_ids(cfg)[:cfg.rovers.count])
 
         self._lock = threading.Lock()
         self._banked = {}        # marker_id -> BankedID (insertion ordered)

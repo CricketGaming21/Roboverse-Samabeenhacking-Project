@@ -16,9 +16,11 @@ meta:
 # real day) — mission code can never start it; there is no pyhulax API for it.
 scenario:
   phases: both             # deploy | ambush | both
-  episode_seconds: 270     # total run length (sim time) — long & deliberate
-  deploy_timeout_s: 90     # max time allowed for part 1; then AMBUSH is forced
-  ambush_seconds: 120      # how long the convoy phase runs
+  # Brief: ~8 MIN PER STAGE. deploy + ambush each budget ~480 s (PROVISIONAL);
+  # episode_seconds caps the whole combined run.
+  episode_seconds: 960     # whole-run cap (~8 min deploy + ~8 min ambush)
+  deploy_timeout_s: 480    # Stage-1 (~8 min) budget; then AMBUSH is forced
+  ambush_seconds: 480      # Stage-2 (~8 min) convoy/search window
   entrance: [0.5, 0.5]     # arena (north,east): drones launch / convoy enters
   ambush_trigger:
     mode: on_all_landed    # on_all_landed (ground truth + delay) | timed
@@ -259,7 +261,8 @@ scoring:
   frame_margin_px: 8       # marker must sit this far inside the frame edges
   hold_frames: 5           # consecutive frames the same drone must hold a valid read
   landing:                 # part-1 referee (landings during DEPLOY)
-    tolerance_m: 0.30      # touchdown within this of a designated pad centre
+    tolerance_m: 0.30      # legacy alias of hoop_radius_m
+    hoop_radius_m: 0.30    # PROVISIONAL: land within this of a valid pad centre to score
     assignment: nearest_unclaimed   # nearest_unclaimed | fixed (drones.units[].pad_id)
     time_weighted: true    # report/weight by time-to-land
 

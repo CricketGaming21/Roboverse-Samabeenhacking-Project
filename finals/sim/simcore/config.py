@@ -379,12 +379,13 @@ class AmbushTriggerConfig:
 
 @dataclass
 class ScenarioConfig:
-    """Two-phase episode: DEPLOY (land on pads) -> AMBUSH (convoy) -> DONE."""
+    """Two-phase episode: DEPLOY (land on pads) -> AMBUSH (convoy) -> DONE.
+    The brief gives ~8 MIN PER STAGE — deploy and ambush each budget ~480 s
+    (PROVISIONAL); episode_seconds caps the whole combined run."""
     phases: str = "both"          # deploy | ambush | both
-    episode_seconds: float = 270.0  # total run length (sim time) — long &
-                                    # deliberate so every system is observable
-    deploy_timeout_s: float = 90.0  # max part-1 time; then AMBUSH is forced
-    ambush_seconds: float = 120.0   # how long the convoy phase runs
+    episode_seconds: float = 960.0  # whole-run cap (~8 min deploy + ~8 min ambush)
+    deploy_timeout_s: float = 480.0  # Stage-1 (~8 min) budget; then AMBUSH is forced
+    ambush_seconds: float = 480.0   # Stage-2 (~8 min) convoy/search window
     entrance: list = field(default_factory=lambda: [0.5, 0.5])  # arena (n, e)
     ambush_trigger: AmbushTriggerConfig = field(
         default_factory=AmbushTriggerConfig)
@@ -392,8 +393,12 @@ class ScenarioConfig:
 
 @dataclass
 class LandingConfig:
-    """Part-1 referee: landing accuracy onto valid+designated pads (DEPLOY)."""
-    tolerance_m: float = 0.30         # touchdown within this of the pad centre
+    """Part-1 referee: landing accuracy onto valid+designated pads (DEPLOY).
+    The brief scores a landing iff it lands INSIDE THE HOOP of a chosen valid
+    pad — hoop_radius_m is that gate (PROVISIONAL until the organisers give the
+    hoop size). tolerance_m is kept as a legacy alias of the same idea."""
+    tolerance_m: float = 0.30         # legacy: touchdown tolerance (see hoop_radius_m)
+    hoop_radius_m: float = 0.30       # PROVISIONAL: land within this of the pad centre to score
     assignment: str = "nearest_unclaimed"  # nearest_unclaimed | fixed (units[].pad_id)
     time_weighted: bool = True        # report/weight by time-to-land
 
