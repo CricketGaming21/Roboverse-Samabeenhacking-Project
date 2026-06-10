@@ -224,6 +224,9 @@ def build_live_mission(cfg, *, sleep, use_dola=False):
     footprints = arena.footprint_tuples()
     inflated = inflate(footprints, cfg.planner.inflate_m)
     graph = build_graph(inflated, bounds)
+    # vantages get EXTRA clearance so UWB noise + lock-on wander can't drift the drone
+    # over a crate (ToF altitude-hold over a crate climbs and breaches the altitude cap).
+    vant_inflated = inflate(footprints, cfg.planner.inflate_m + 0.3)
 
     ips = Discovery.from_config(cfg, use_dola=use_dola).resolve()    # {tag: ip}
     starts = cfg.starts_by_tag()
@@ -252,15 +255,16 @@ def build_live_mission(cfg, *, sleep, use_dola=False):
         path = plan_path(starts[t], pad_by_tag[t], graph)
         routes[t] = path if path else [starts[t], pad_by_tag[t]]
 
-    vantages = overwatch_vantages(bounds, inflated, pad_by_tag)
+    vantages = overwatch_vantages(bounds, vant_inflated, pad_by_tag)
     plan = _PlanView(pad_ids, routes, vantages)
     intr = CameraIntrinsics(cfg.camera.width, cfg.camera.height, cfg.camera.h_fov_deg)
-    return drones, streams, uwb, pad_coords, footprints, intr, plan, starts
+    return drones, streams, uwb, pad_coords, footprints, intr, plan, starts, graph
 
 
-def _report(cfg, mission, pad_coords, plan, uwb, footprints, rover_ids):
+def _report(cfg, mission, pad_coords, plan, land_xy, footprints, rover_ids):
     """Mission-side honest report (the authoritative referee lives in the sim's
-    DebugProbe, which mission code may not import — the @integration test cross-checks it)."""
+    DebugProbe, which mission code may not import — the @integration test cross-checks it).
+    `land_xy` = {tag: (x,y)} captured from UWB right after Phase 1 (before shutdown)."""
     import math
     lines = ["", "=" * 64, "MISSION REPORT (mission-side telemetry)", "=" * 64]
     pad_ids = plan.pad_assignment()
@@ -269,15 +273,15 @@ def _report(cfg, mission, pad_coords, plan, uwb, footprints, rover_ids):
         w = mission.workers[tag]
         pad_id = pad_ids[tag]
         px, py = pad_coords[pad_id]
-        x, y, _ = uwb.get_tag_position(tag)
-        if x is None:
-            lines.append(f"  drone {tag}: pad {pad_id}  UWB=DROPOUT  state={w.state}")
+        xy = land_xy.get(tag)
+        if xy is None or xy[0] is None:
+            lines.append(f"  drone {tag}: pad {pad_id}  UWB=DROPOUT  state={w.state.value}")
             continue
-        err = math.hypot(x - px, y - py)
-        in_hoop = err <= 0.30 and w.state.value == "LANDED"
+        err = math.hypot(xy[0] - px, xy[1] - py)
+        in_hoop = err <= 0.30
         landed += int(in_hoop)
-        lines.append(f"  drone {tag}: pad {pad_id} land_err={err * 100:5.1f}cm "
-                     f"{'IN-HOOP' if in_hoop else 'OUT'}  state={w.state.value}  "
+        lines.append(f"  drone {tag}: pad {pad_id} phase1_land_err={err * 100:5.1f}cm "
+                     f"{'IN-HOOP' if in_hoop else 'OUT'}  final_state={w.state.value}  "
                      f"err={w.error}")
     tagged = sorted(mission.state.tagged())
     distinct = sorted(set(tagged) & set(rover_ids))
@@ -313,18 +317,21 @@ def main(argv=None) -> int:
     dwell = float(os.environ.get("HULA_PHASE2_DWELL_S", "1.0"))
     use_dola = bool(os.environ.get("HULA_USE_DOLA"))
 
-    drones, streams, uwb, pad_coords, footprints, intr, plan, starts = \
+    drones, streams, uwb, pad_coords, footprints, intr, plan, starts, graph = \
         build_live_mission(cfg, sleep=time.sleep, use_dola=use_dola)
 
     mission = Mission(cfg, plan, drones=drones, uwb=uwb, streams=streams,
                       pad_coords=pad_coords, footprints=footprints,
                       all_rover_ids=rover_ids, intrinsics=intr, sleep=time.sleep,
                       phase2_kwargs={"budget_cycles": cycles, "dwell_s": dwell,
-                                     "mopup_extra_cycles": 1, "gimbal_deg": 90})
+                                     "mopup_extra_cycles": 1, "gimbal_deg": 90,
+                                     "graph": graph})    # route Phase-2 hops around crates
+    land_xy = {}
     try:
         print(f"[main] connected {sorted(drones)}; landing on pads "
               f"{plan.pad_assignment()}", flush=True)
         landings = mission.run_phase1(parallel=True)
+        land_xy = {t: uwb.get_tag_position(t)[:2] for t in drones}   # capture before relaunch
         print(f"[main] phase 1 done: {landings}; waiting for convoy "
               f"(on_all_landed trigger)…", flush=True)
         time.sleep(4.0)                              # let the ambush trigger + convoy enter
@@ -337,7 +344,7 @@ def main(argv=None) -> int:
             pass
         for d in drones.values():
             sdk_compat.release(d)
-    _report(cfg, mission, pad_coords, plan, uwb, footprints, rover_ids)
+    _report(cfg, mission, pad_coords, plan, land_xy, footprints, rover_ids)
     return 0
 
 

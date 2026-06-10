@@ -218,12 +218,13 @@ def test_full_run_against_real_sim():
     from mission.runtime.main import Mission, build_live_mission
 
     cfg = load_config()
-    drones, streams, uwb, pad_coords, footprints, intr, plan, starts = \
+    drones, streams, uwb, pad_coords, footprints, intr, plan, starts, graph = \
         build_live_mission(cfg, sleep=time.sleep)
     mission = Mission(cfg, plan, drones=drones, uwb=uwb, streams=streams,
                       pad_coords=pad_coords, footprints=footprints,
                       all_rover_ids=[20, 21, 22, 23, 24], intrinsics=intr,
-                      sleep=time.sleep, phase2_kwargs={"budget_cycles": 1, "dwell_s": 0.8})
+                      sleep=time.sleep, phase2_kwargs={"budget_cycles": 1, "dwell_s": 0.8,
+                                                       "graph": graph})
     try:
         mission.run_phase1(parallel=True)
         time.sleep(4.0)                                  # let on_all_landed fire + convoy enter

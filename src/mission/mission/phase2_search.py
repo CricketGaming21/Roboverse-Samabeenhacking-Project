@@ -142,15 +142,27 @@ def lock_and_tag(drone, stream, detection, state, *, hold_frames: int = 5,
 # --------------------------------------------------------------------------- #
 def vantage_patrol(drone, uwb, tag_id: int, vantages: Sequence[dict],
                    on_dwell: Callable[[], bool], *, gimbal_deg: float = 90.0,
-                   dwell_s: float = 1.0, alt_m: float = 1.1, guard=None,
+                   dwell_s: float = 1.0, alt_m: float = 1.1, guard=None, graph=None,
                    rate_hz: float = 20.0, sleep=time.sleep, on_step=None,
                    **loop_kwargs) -> bool:
     """One cycle of overwatch: fly to each vantage, tilt the gimbal, dwell while calling
-    `on_dwell()` per frame. `on_dwell` returns True to stop the whole patrol (done)."""
+    `on_dwell()` per frame. `on_dwell` returns True to stop the whole patrol (done).
+
+    With `graph`, each vantage hop is routed **around inflated footprints** (no-overfly is
+    structural in Phase 2 too — a straight hop can cut over a crate, breaching compliance)."""
+    from mission.planner.geometry import plan_path
     dt = 1.0 / rate_hz if rate_hz > 0 else 0.05
     for v in vantages:
-        fly_to_uwb(drone, uwb, tag_id, tuple(v["xy"]), alt_m=alt_m, guard=guard,
-                   rate_hz=rate_hz, sleep=sleep, on_step=on_step, **loop_kwargs)
+        target = (float(v["xy"][0]), float(v["xy"][1]))
+        waypoints = [target]
+        if graph is not None:
+            cur = drone_arena_xy(drone, uwb, tag_id) or target
+            path = plan_path(cur, target, graph)
+            if path:
+                waypoints = path[1:] if len(path) > 1 else path
+        for wp in waypoints:
+            fly_to_uwb(drone, uwb, tag_id, wp, alt_m=alt_m, guard=guard,
+                       rate_hz=rate_hz, sleep=sleep, on_step=on_step, **loop_kwargs)
         drone.set_camera_angle(_DOWN, float(v.get("gimbal_deg", gimbal_deg)))
         dwell_steps = max(1, int(float(v.get("dwell_s", dwell_s)) * rate_hz))
         for _ in range(dwell_steps):
@@ -174,7 +186,7 @@ def phase2_search(drone, uwb, tag_id: int, vantages: Sequence[dict], stream, sta
                   lock_timeout_s: float = 6.0, center_tol_px: int = 45,
                   kp_px: float = 0.02, hold_frames: int = 5,
                   intrinsics: Optional[CameraIntrinsics] = None, alt_m: float = 1.1,
-                  sleep=time.sleep, clock: Callable[[], float] = time.time,
+                  graph=None, sleep=time.sleep, clock: Callable[[], float] = time.time,
                   on_step=None, **loop_kwargs) -> set:
     """Patrol vantages, lock-and-tag distinct rover ids within `bubble` (mop-up drops the
     gate near the end). Returns the set of ids THIS drone banked."""
@@ -219,8 +231,8 @@ def phase2_search(drone, uwb, tag_id: int, vantages: Sequence[dict], stream, sta
             flags["mopup"] = True                         # endgame: drop the gate
         if vantage_patrol(drone, uwb, tag_id, vantages, scan_and_lock,
                           gimbal_deg=gimbal_deg, dwell_s=dwell_s, alt_m=alt_m,
-                          guard=guard, rate_hz=rate_hz, sleep=sleep, on_step=on_step,
-                          **loop_kwargs):
+                          guard=guard, graph=graph, rate_hz=rate_hz, sleep=sleep,
+                          on_step=on_step, **loop_kwargs):
             break
     return banked
 
