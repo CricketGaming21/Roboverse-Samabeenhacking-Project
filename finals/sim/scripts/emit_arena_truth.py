@@ -26,9 +26,9 @@ def main(argv=None) -> None:
 
     cfg = load_config(args.config)
     data = write_arena_truth(cfg, args.out)
-    print(f"wrote {args.out}: {len(data['crates'])} crates, arena "
-          f"{data['arena']['length_m']}x{data['arena']['width_m']} m, "
-          f"archway at {data['archway']['corner']}")
+    print(f"wrote {args.out}: {len(data['structures'])} structures, "
+          f"{len(data['landing_zones'])} landing zones, arena "
+          f"{data['arena']['length_m']}x{data['arena']['width_m']} m")
 
 
 if __name__ == "__main__":

@@ -20,17 +20,19 @@ _HEADER = (
     "# loads THIS file (yaml.safe_load) — it must NOT import simcore.\n"
     "# Regenerate with:  python -m scripts.emit_arena_truth\n"
     "#\n"
-    "# PROVISIONAL: mirrors sim_config.yaml arena.authored, which is a best\n"
-    "# estimate from the brief images. Replace with the real Discord numbers.\n"
+    "# PROVISIONAL: mirrors sim_config.yaml arena.authored — a starting\n"
+    "# estimate from the arena layout. Replace with the confirmed numbers.\n"
     "#\n"
-    "# Frames: arena (north, east) metres; crate center = footprint centre,\n"
-    "# size = full footprint [north_m, east_m], height = crate height m.\n"
+    "# Frames: arena (north, east) m = competition (y, x). structures: center =\n"
+    "# footprint centre, size = [north_m, east_m], height m (arch gates appear as\n"
+    "# their two posts). landing_zones: coordinate-only (no marker), with valid.\n"
 )
 
 
 def build_arena_truth(cfg) -> dict:
-    """The authored arena as a plain, simcore-free dict (dimensions + every
-    crate's center/size/height + the archway)."""
+    """The authored arena as a plain, simcore-free dict for the mission: arena
+    dimensions, every structure's center/size/height (arch gates appear as
+    their two posts), and the landing zones (coordinate-only, with valid)."""
     au = cfg.arena.authored
     return {
         "arena": {
@@ -38,7 +40,7 @@ def build_arena_truth(cfg) -> dict:
             "width_m": float(cfg.arena.width_m),
             "height_m": float(cfg.arena.height_m),
         },
-        "crates": [
+        "structures": [
             {
                 "center": [float(cl.center[0]), float(cl.center[1])],
                 "size": [float(cl.size[0]), float(cl.size[1])],
@@ -46,11 +48,15 @@ def build_arena_truth(cfg) -> dict:
             }
             for cl in au.clusters
         ],
-        "archway": {
-            "corner": [float(au.archway.corner[0]), float(au.archway.corner[1])],
-            "width_m": float(au.archway.width_m),
-            "height_m": float(au.archway.height_m),
-        },
+        "landing_zones": [
+            {
+                "id": int(pad.id),
+                "north": float(pad.north),
+                "east": float(pad.east),
+                "valid": bool(pad.valid),
+            }
+            for pad in cfg.pads
+        ],
     }
 
 

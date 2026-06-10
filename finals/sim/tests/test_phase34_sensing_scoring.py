@@ -121,11 +121,11 @@ def test_distinct_id_scoring_counts_both_id_blocks():
     reg = get_registry(c)
     try:
         # the referee accepts BOTH blocks as part-2 targets (5 distinct ids)
-        assert reg.referee._targets == {20, 21, 22, 30, 31}
+        assert reg.referee._targets == {11, 45, 51, 67, 101}
 
-        # scan an EVASIVE rover (id 30) up close -> it banks (the block counts)
+        # scan an EVASIVE rover (id 67) up close -> it banks (the block counts)
         ev = reg.rovers[3]
-        assert ev.marker_id == 30
+        assert ev.marker_id == 67
         rn, re_ = reg.run_on_sim_thread(ev.arena_position)
         d = DroneAPI(); d.connect(c.drones.units[0].ip); d.takeoff(150)
         from pyhulax.core import CameraPitchMode
@@ -134,9 +134,9 @@ def test_distinct_id_scoring_counts_both_id_blocks():
         d.move_to(x, y, 150)
         d.set_camera_angle(CameraPitchMode.DOWN_ABSOLUTE, 90)
         deadline = time.time() + 8.0
-        while time.time() < deadline and 30 not in reg.referee.banked_ids():
+        while time.time() < deadline and 67 not in reg.referee.banked_ids():
             time.sleep(0.05)
-        assert 30 in reg.referee.banked_ids()       # an evasive id scored
+        assert 67 in reg.referee.banked_ids()       # an evasive id scored
     finally:
         shutdown_registry()
 

@@ -110,7 +110,8 @@ def test_marker_ids_distinct_and_match_config(cfg_move):
         ids = [r.marker_id for r in reg.rovers]
         assert ids == list(cfg_move.rovers.marker_ids)[:cfg_move.rovers.count]
         assert len(set(ids)) == len(ids) == 5
-        assert not set(ids) & {p.id for p in cfg_move.pads}
+        # pads carry NO ArUco marker (Phase 35), so the referee never confuses a
+        # pad with a rover even though the id NUMBERS coincide as labels.
     finally:
         shutdown_registry()
 

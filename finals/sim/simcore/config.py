@@ -81,40 +81,32 @@ class AuthoredClusterSpec:
 
 
 @dataclass
-class ArchwayConfig:
-    """Archway/tunnel feature: two pillars + a lintel to fly under/around."""
-    corner: list = field(default_factory=lambda: [9.0, 5.0])  # arena (north, east)
-    width_m: float = 1.0              # passage opening between the pillars
-    height_m: float = 1.2             # clearance under the lintel
-
-
-@dataclass
 class AuthoredConfig:
-    """Fixed layout for arena.layout: authored — each crate's center/size/height
-    is data-driven so the real Discord arena coordinates drop straight in.
-
-    PROVISIONAL DEFAULTS: these crate positions/heights are a best estimate read
-    off the brief images — NOT confirmed measurements. Replace the whole
-    `clusters` list (and length_m/width_m/archway) with the Discord numbers when
-    available. The same data is emitted to arena_truth.yaml for the mission."""
+    """The real competition arena (authored layout) — same per-box schema as
+    before (each entry: center [north, east] = competition [y, x], size
+    [north_m, east_m], height). The 4 ARCH GATES are modelled as TWO posts each
+    (the gap between a pair stays OPEN/landable); the rest are solid structures
+    (cone-pole triangle, plain cone, low wall, ramp ≈ low box). PROVISIONAL —
+    a STARTING ESTIMATE to be nudged; emitted to arena_truth.yaml."""
     clusters: list = field(default_factory=lambda: [
-        # central crate group (PROVISIONAL)
-        AuthoredClusterSpec(center=[5.00, 3.00], size=[0.45, 0.45], height=0.4),
-        AuthoredClusterSpec(center=[5.45, 3.00], size=[0.45, 0.45], height=0.6),
-        AuthoredClusterSpec(center=[5.00, 3.45], size=[0.45, 0.45], height=0.8),
-        AuthoredClusterSpec(center=[4.55, 3.00], size=[0.45, 0.45], height=1.0),
-        AuthoredClusterSpec(center=[5.45, 3.45], size=[0.45, 0.45], height=1.2),
-        # upper-right pair (PROVISIONAL)
-        AuthoredClusterSpec(center=[7.50, 4.20], size=[0.45, 0.45], height=0.6),
-        AuthoredClusterSpec(center=[7.95, 4.20], size=[0.45, 0.45], height=1.0),
-        # right-edge pair (PROVISIONAL)
-        AuthoredClusterSpec(center=[4.60, 5.40], size=[0.45, 0.45], height=0.4),
-        AuthoredClusterSpec(center=[5.05, 5.40], size=[0.45, 0.45], height=0.9),
-        # lower-centre pair (PROVISIONAL)
-        AuthoredClusterSpec(center=[3.00, 3.50], size=[0.45, 0.45], height=0.5),
-        AuthoredClusterSpec(center=[3.45, 3.50], size=[0.45, 0.45], height=1.1),
+        # Arch GATES — two posts each (0.16 east x 0.25 north, h 1.10), 0.9 m
+        # apart along easting with the opening between them OPEN.
+        AuthoredClusterSpec(center=[2.20, 2.33], size=[0.25, 0.16], height=1.10),  # A1 hazard
+        AuthoredClusterSpec(center=[2.20, 3.07], size=[0.25, 0.16], height=1.10),
+        AuthoredClusterSpec(center=[4.00, 1.33], size=[0.25, 0.16], height=1.10),  # A2 hazard (zone 11)
+        AuthoredClusterSpec(center=[4.00, 2.07], size=[0.25, 0.16], height=1.10),
+        AuthoredClusterSpec(center=[5.70, 3.43], size=[0.25, 0.16], height=1.10),  # A3 plain
+        AuthoredClusterSpec(center=[5.70, 4.17], size=[0.25, 0.16], height=1.10),
+        AuthoredClusterSpec(center=[8.30, 2.13], size=[0.25, 0.16], height=1.10),  # A4 plain
+        AuthoredClusterSpec(center=[8.30, 2.87], size=[0.25, 0.16], height=1.10),
+        # Solid structures (low, <= 1.1 m).
+        AuthoredClusterSpec(center=[4.70, 2.30], size=[0.42, 0.42], height=1.10),  # cone-pole A
+        AuthoredClusterSpec(center=[5.50, 2.30], size=[0.42, 0.42], height=1.10),  # cone-pole B
+        AuthoredClusterSpec(center=[5.10, 3.10], size=[0.42, 0.42], height=1.10),  # cone-pole C
+        AuthoredClusterSpec(center=[5.10, 1.55], size=[0.34, 0.34], height=0.30),  # plain cone
+        AuthoredClusterSpec(center=[7.00, 4.00], size=[1.00, 0.42], height=0.34),  # low wall
+        AuthoredClusterSpec(center=[6.70, 1.70], size=[0.95, 0.46], height=0.32),  # ramp (box approx)
     ])
-    archway: ArchwayConfig = field(default_factory=ArchwayConfig)
 
 
 @dataclass
@@ -272,8 +264,8 @@ class CameraConfig:
 
 @dataclass
 class ArucoConfig:
-    dictionary: str = "DICT_6X6_250"
-    pad_marker_size_m: float = 0.30
+    dictionary: str = "DICT_7X7_1000"   # real-event dictionary (ids 0-999)
+    pad_marker_size_m: float = 0.30      # legacy footprint size (pads carry NO marker)
     rover_marker_size_m: float = 0.15
 
 
@@ -297,21 +289,17 @@ class ConvoyConfig:
     turn_rate_dps: float = 70.0       # max heading turn rate — eases around
                                       # corners + the loop seam (no spinning)
     trunk: list = field(default_factory=lambda: [
-        [1.0, 0.8], [2.5, 1.5], [4.0, 2.0]])
-    split_index: int = 2              # after trunk[split_index], branch off
-    # Long, winding per-rover loops traced from the reference image (not
-    # straight hops); each loops via loiter=loop. Threaded between the
-    # crates and through the arch — the phase-11 full-path test enforces it.
+        [1.0, 0.7], [1.5, 0.7]])      # entrance -> SW corner (clear south band)
+    split_index: int = 1              # after trunk[split_index], branch off
+    # Perimeter loops in the structure-free side lanes (west east~0.7-0.9, east
+    # east~4.7-5.0) + clear north/south cross-bands; loiter=loop cycles them.
+    # The phase-11 full-path clearance test enforces no waypoint clips a body.
     branches: list = field(default_factory=lambda: [
-        [[5.0, 1.2], [6.5, 0.9], [8.0, 1.2], [8.6, 2.2], [7.5, 2.6],
-         [6.0, 2.2], [5.0, 1.8]],
-        [[5.6, 2.2], [7.0, 2.6], [8.2, 3.4], [8.6, 2.6], [7.4, 2.0],
-         [6.3, 1.6]],
-        [[4.0, 4.3], [5.8, 4.6], [7.0, 5.2], [8.5, 5.2], [9.4, 5.05],
-         [9.4, 3.7], [8.6, 3.6], [7.0, 3.7], [6.2, 4.5]],
-        [[4.0, 4.0], [3.2, 4.8], [2.2, 5.2], [1.5, 4.3], [2.4, 3.9],
-         [3.2, 4.2]],
-        [[5.5, 2.4], [7.0, 2.1], [8.4, 2.4], [9.4, 3.2], [9.4, 4.0]],
+        [[1.5, 0.60], [7.5, 0.60], [7.5, 0.85], [1.5, 0.85]],     # west lane
+        [[1.5, 0.72], [5.5, 0.72], [5.5, 0.95], [1.5, 0.95]],     # west lane
+        [[1.5, 4.90], [6.0, 4.90], [6.0, 5.15], [1.5, 5.15]],     # east lane (via south band)
+        [[1.6, 4.72], [4.8, 4.72], [4.8, 5.00], [1.6, 5.00]],     # east lane
+        [[1.5, 0.62], [4.0, 0.62], [4.0, 0.86], [1.5, 0.86]],     # SW short
     ])
     loiter: str = "loop"              # loop the branch | hold at the end
 
@@ -353,15 +341,15 @@ class MixedConfig:
     Marker ids come in two blocks (auto + evasive); count must equal their
     total. All PROVISIONAL until the organisers confirm."""
     auto_motion: str = "convoy"       # autonomous rovers' motion (convoy|patrol), smooth
-    auto_ids: list = field(default_factory=lambda: [20, 21, 22])
-    evasive_ids: list = field(default_factory=lambda: [30, 31])
+    auto_ids: list = field(default_factory=lambda: [11, 45, 51])     # computer-driven
+    evasive_ids: list = field(default_factory=lambda: [67, 101])     # manually driven
     evasive: EvasiveConfig = field(default_factory=EvasiveConfig)
 
 
 @dataclass
 class RoversConfig:
     count: int = 5
-    marker_ids: list = field(default_factory=lambda: [20, 21, 22, 23, 24])
+    marker_ids: list = field(default_factory=lambda: [11, 45, 51, 67, 101])
     billboard_texture: str = "assets/robomaster.png"
     motion: str = "convoy"            # convoy (fixed routes, DEFAULT) | patrol (random) | mixed (3 auto + 2 evasive)
     convoy: ConvoyConfig = field(default_factory=ConvoyConfig)
@@ -505,12 +493,15 @@ class SimConfig:
     barrier_sensors: BarrierSensorsConfig = field(default_factory=BarrierSensorsConfig)
     camera: CameraConfig = field(default_factory=CameraConfig)
     aruco: ArucoConfig = field(default_factory=ArucoConfig)
+    # The 5 real landing zones — COORDINATE-ONLY (no ArUco marker), arena
+    # [north, east] = competition [y, x]. PROVISIONAL 3 valid / 2 invalid;
+    # zone 11 sits in arch A2's (clear) opening.
     pads: list = field(default_factory=lambda: [
-        PadSpec(id=10, north=8.5, east=3.0, valid=True, designated=True),
-        PadSpec(id=11, north=5.5, east=4.8, valid=True, designated=True),
-        PadSpec(id=12, north=2.0, east=4.5, valid=True, designated=True),
-        PadSpec(id=13, north=5.5, east=1.2, valid=False, designated=False),
-        PadSpec(id=14, north=2.0, east=1.5, valid=True, designated=False),
+        PadSpec(id=11, north=4.40, east=1.35, valid=True, designated=True),
+        PadSpec(id=45, north=7.85, east=1.30, valid=True, designated=True),
+        PadSpec(id=51, north=4.40, east=4.40, valid=True, designated=True),
+        PadSpec(id=67, north=8.70, east=1.95, valid=False, designated=False),
+        PadSpec(id=101, north=7.85, east=4.40, valid=False, designated=False),
     ])
     rovers: RoversConfig = field(default_factory=RoversConfig)
     scoring: ScoringConfig = field(default_factory=ScoringConfig)

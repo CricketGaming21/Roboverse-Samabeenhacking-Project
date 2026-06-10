@@ -42,8 +42,8 @@ def test_authored_arena_is_data_driven_per_crate(cfg):
         assert len(cl.center) == 2 and len(cl.size) == 2
         assert cl.height > 0.0
     layout = arena.generate(cfg)
-    # one obstacle per crate + 3 archway parts, each at its configured footprint
-    assert len(layout.obstacles) == len(au.clusters) + 3
+    # one obstacle per authored structure entry, at its configured footprint
+    assert len(layout.obstacles) == len(au.clusters)
     for cl, o in zip(au.clusters, layout.obstacles[:len(au.clusters)]):
         assert (o.north, o.east) == pytest.approx(tuple(cl.center))
         assert o.half_n == pytest.approx(cl.size[0] / 2)
@@ -84,17 +84,17 @@ def test_emitted_arena_truth_matches_authored_config(cfg, tmp_path):
     assert data["arena"] == {"length_m": cfg.arena.length_m,
                              "width_m": cfg.arena.width_m,
                              "height_m": cfg.arena.height_m}
-    # one crate per authored cluster, center/size/height verbatim
-    assert len(data["crates"]) == len(au.clusters)
-    for crate, cl in zip(data["crates"], au.clusters):
-        assert crate["center"] == [cl.center[0], cl.center[1]]
-        assert crate["size"] == [cl.size[0], cl.size[1]]
-        assert crate["height"] == cl.height
-    # archway
-    assert data["archway"]["corner"] == [au.archway.corner[0],
-                                         au.archway.corner[1]]
-    assert data["archway"]["width_m"] == au.archway.width_m
-    assert data["archway"]["height_m"] == au.archway.height_m
+    # one structure per authored cluster, center/size/height verbatim
+    assert len(data["structures"]) == len(au.clusters)
+    for st, cl in zip(data["structures"], au.clusters):
+        assert st["center"] == [cl.center[0], cl.center[1]]
+        assert st["size"] == [cl.size[0], cl.size[1]]
+        assert st["height"] == cl.height
+    # landing zones (coordinate-only, with valid)
+    assert len(data["landing_zones"]) == len(cfg.pads)
+    for lz, pad in zip(data["landing_zones"], cfg.pads):
+        assert lz["id"] == pad.id and lz["valid"] == pad.valid
+        assert lz["north"] == pad.north and lz["east"] == pad.east
 
     # round-trips through a plain YAML file the mission loads WITHOUT simcore
     out = tmp_path / "arena_truth.yaml"
@@ -118,7 +118,7 @@ def test_arena_truth_is_simcore_free_plain_data():
         text = f.read()
     assert "!!python" not in text                    # no pickled python objects
     data = yaml.safe_load(text)
-    assert set(data) == {"arena", "crates", "archway"}
+    assert set(data) == {"arena", "structures", "landing_zones"}
 
     def _plain(v):
         if isinstance(v, dict):

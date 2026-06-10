@@ -27,6 +27,10 @@ _RGBA = {
     "pad": (1.0, 1.0, 1.0, 1.0),  # white: texture colours pass through as-is
 }
 
+# Coordinate-only landing markings (no ArUco): green valid, red invalid.
+_PAD_VALID_RGBA = (0.15, 0.75, 0.20, 1.0)
+_PAD_INVALID_RGBA = (0.80, 0.15, 0.15, 1.0)
+
 
 @dataclass(frozen=True)
 class WorldBodies:
@@ -166,28 +170,21 @@ def _make_rover(client, cfg, pose, marker_id) -> int:
 
 
 def _make_pad(client, cfg, pad) -> int:
-    """ArUco landing pad: textured slab flat on the floor, facing up, at the
-    CONFIGURED arena coordinates. Pad side is sized so the printed marker
-    (incl. black border) measures exactly aruco.pad_marker_size_m. The visual
-    is a UV-mapped quad (GEOM_BOX auto-UVs would crop the marker)."""
-    side = cfg.aruco.pad_marker_size_m * aruco_assets.texture_scale()
+    """Landing zone: a flat COORDINATE-ONLY floor marking (NO ArUco marker),
+    a thin coloured slab lying on the floor at the configured arena
+    coordinates — green when valid, red when invalid. A pad is NOT an obstacle
+    (mass 0, flush with the floor) and carries nothing to detect."""
+    r = float(cfg.aruco.pad_marker_size_m) / 2.0   # marking half-side
     pos = frames.arena_to_world(cfg, pad.north, pad.east, _PAD_HALF_H)
     orn = p.getQuaternionFromEuler([0.0, 0.0, frames.arena_yaw_world_rad(cfg)])
-    col = p.createCollisionShape(p.GEOM_BOX,
-                                 halfExtents=[side / 2, side / 2, _PAD_HALF_H],
+    rgba = _PAD_VALID_RGBA if pad.valid else _PAD_INVALID_RGBA
+    col = p.createCollisionShape(p.GEOM_BOX, halfExtents=[r, r, _PAD_HALF_H],
                                  physicsClientId=client)
-    vis = p.createVisualShape(
-        p.GEOM_MESH, fileName=aruco_assets.ensure_quad_obj(pad.id),
-        meshScale=[side, side, 1.0], rgbaColor=_RGBA["pad"],
-        visualFramePosition=[0.0, 0.0, _PAD_HALF_H + 0.001],  # just atop slab
-        physicsClientId=client)
-    body = p.createMultiBody(baseMass=0, baseCollisionShapeIndex=col,
+    vis = p.createVisualShape(p.GEOM_BOX, halfExtents=[r, r, _PAD_HALF_H],
+                              rgbaColor=rgba, physicsClientId=client)
+    return p.createMultiBody(baseMass=0, baseCollisionShapeIndex=col,
                              baseVisualShapeIndex=vis, basePosition=pos,
                              baseOrientation=orn, physicsClientId=client)
-    tex = p.loadTexture(aruco_assets.ensure_marker_png(cfg, pad.id),
-                        physicsClientId=client)
-    p.changeVisualShape(body, -1, textureUniqueId=tex, physicsClientId=client)
-    return body
 
 
 def build(client: int, cfg, layout) -> WorldBodies:

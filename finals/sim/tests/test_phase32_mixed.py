@@ -38,17 +38,17 @@ def _mixed_cfg(juke=0.0):
 
 def test_mixed_spawns_3_auto_2_evasive_with_id_blocks():
     cfg = _mixed_cfg()
-    assert rover_model.resolved_marker_ids(cfg) == [20, 21, 22, 30, 31]
+    assert rover_model.resolved_marker_ids(cfg) == [11, 45, 51, 67, 101]
     reg = get_registry(cfg)
     try:
         plan = reg.run_on_sim_thread(
             lambda: [(r.marker_id, r._personality) for r in reg.rovers])
-        assert plan == [(20, "convoy"), (21, "convoy"), (22, "convoy"),
-                        (30, "evasive"), (31, "evasive")]
-        # the two id blocks are disjoint and the evasive ids are the [30,31] block
+        assert plan == [(11, "convoy"), (45, "convoy"), (51, "convoy"),
+                        (67, "evasive"), (101, "evasive")]
+        # the two id blocks are disjoint and the evasive ids are the [67,101] block
         auto = {m for m, p in plan if p == "convoy"}
         evasive = {m for m, p in plan if p == "evasive"}
-        assert auto == {20, 21, 22} and evasive == {30, 31}
+        assert auto == {11, 45, 51} and evasive == {67, 101}
         assert auto.isdisjoint(evasive)
     finally:
         shutdown_registry()
@@ -65,15 +65,15 @@ def test_evasive_flees_a_nearby_drone():
         d = DroneAPI()
         d.connect(cfg.drones.units[0].ip)
         d.takeoff(110)
-        # hover the drone at a fixed, crate-clear point, then HOLD station
+        # hover the drone at a fixed, structure-clear point, then HOLD station
         fr = reg.run_on_sim_thread(lambda: reg.drones[0].takeoff_frame)
-        hover_ne = (5.0, 1.0)
+        hover_ne = (3.0, 1.0)
         x, y, _ = frames.arena_to_takeoff_cm(cfg, fr, *hover_ne)
         d.move_to(x, y, 110)                   # blocking: settles at the point
         ev = reg.rovers[3]                     # first evasive rover
 
         def place_rover():                     # 0.7 m away -> within flee_radius
-            wx, wy, _ = frames.arena_to_world(cfg, 5.0, 1.7, 0.0)
+            wx, wy, _ = frames.arena_to_world(cfg, 3.0, 1.7, 0.0)
             ev.pos[:] = [wx, wy, ev._half_z]
             ev.in_arena = True
             ev._next_decision = 0.0

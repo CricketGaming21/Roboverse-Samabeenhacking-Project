@@ -41,12 +41,13 @@ import numpy as np
 from pyhulax import DroneAPI
 from pyhulax.core import CameraPitchMode
 
-# The organiser ArUco dictionary — the sim renders rover + pad markers from it,
-# scores on it, and the mission confirms on it (keep them identical).
-ARUCO_DICT = "DICT_6X6_250"
+# The organiser ArUco dictionary — the sim renders the rover markers from it,
+# scores on it, and the mission confirms on it (keep them identical). Landing
+# pads carry NO marker (coordinate-only).
+ARUCO_DICT = "DICT_7X7_1000"
 
-# Rover marker ids the sim assigns (config rovers.marker_ids); pads use 10-14.
-ROVER_ID_RANGE = range(20, 25)
+# Rover marker ids the sim assigns (config rovers.marker_ids).
+ROVER_ID_RANGE = frozenset({11, 45, 51, 67, 101})
 
 
 @dataclass
@@ -245,9 +246,7 @@ def main(argv=None) -> int:
                 print(f"sweep (x={x:>4} y={y:>4} cm):  STAGE1 YOLO -> {stage1}")
                 if result.confirmed:
                     for c in result.confirmed:
-                        kind = ("ROVER" if c.marker_id in ROVER_ID_RANGE
-                                else "pad" if 10 <= c.marker_id <= 14
-                                else "marker")
+                        kind = "ROVER" if c.marker_id in ROVER_ID_RANGE else "marker"
                         print(f"    STAGE2 cv2.aruco CONFIRMED {kind} id "
                               f"{c.marker_id}  bbox={c.bbox}")
                     print("\nSeam demonstrated: YOLO (placeholder) proposed a "

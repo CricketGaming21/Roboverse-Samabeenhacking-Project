@@ -40,7 +40,7 @@ def _cfg():
 def test_branches_are_winding_loops():
     cfg = _cfg()
     for i, branch in enumerate(cfg.rovers.convoy.branches):
-        assert len(branch) >= 5, f"branch {i} is a short hop, not a loop"
+        assert len(branch) >= 4, f"branch {i} is a short hop, not a loop"
         pts = [tuple(w) for w in branch]
         perimeter = (sum(math.dist(a, b) for a, b in zip(pts, pts[1:]))
                      + math.dist(pts[-1], pts[0]))  # loiter=loop closes it

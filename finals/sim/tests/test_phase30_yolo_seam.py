@@ -60,7 +60,7 @@ def test_placeholder_detector_implements_interface_and_returns_candidates():
 # Stage 2 — REAL cv2.aruco confirm, and the full two-stage flow on a frame
 # --------------------------------------------------------------------------- #
 
-def _synthetic_marker_frame(marker_id=22, dict_name="DICT_6X6_250"):
+def _synthetic_marker_frame(marker_id=51, dict_name="DICT_7X7_1000"):
     dic = cv2.aruco.getPredefinedDictionary(getattr(cv2.aruco, dict_name))
     img = np.full((480, 640), 255, np.uint8)
     img[140:340, 220:420] = cv2.aruco.generateImageMarker(dic, marker_id, 200)
@@ -68,8 +68,8 @@ def _synthetic_marker_frame(marker_id=22, dict_name="DICT_6X6_250"):
 
 
 def test_aruco_confirm_decodes_real_id():
-    confirmed = ex.confirm_with_aruco(_synthetic_marker_frame(23))
-    assert [c.marker_id for c in confirmed] == [23]
+    confirmed = ex.confirm_with_aruco(_synthetic_marker_frame(45))
+    assert [c.marker_id for c in confirmed] == [45]
     assert confirmed[0].source == "aruco" and confirmed[0].confirmed
 
 
@@ -93,12 +93,12 @@ def test_two_stage_flow_yolo_stub_then_aruco_confirm_with_approach():
         approached["called"] = True
         assert cands and cands[0].source == "yolo"   # given the stage-1 boxes
 
-    stream = _OneFrameStream(_synthetic_marker_frame(20))
+    stream = _OneFrameStream(_synthetic_marker_frame(11))
     res = ex.two_stage_scan(stream, ex.PlaceholderRoverDetector(),
                             approach=approach)
     assert approached["called"]                       # APPROACH ran
     assert res.candidates and res.candidates[0].marker_id is None  # STAGE 1
-    assert 20 in res.confirmed_ids                    # STAGE 2 (real cv2.aruco)
+    assert 11 in res.confirmed_ids                    # STAGE 2 (real cv2.aruco)
 
 
 # --------------------------------------------------------------------------- #

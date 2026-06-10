@@ -93,11 +93,11 @@ real SDK on the day.
 
 ## Markers used
 
-- Dictionary: **`DICT_6X6_250`** (config `aruco.dictionary` — matches the
-  organiser sample; confirm at the briefing).
-- **Rover** marker ids: `20–24` (config `rovers.marker_ids`).
-- **Pad** marker ids: `10–14`. Pads are visible from the start (DEPLOY); rovers
-  enter the arena during AMBUSH.
+- Dictionary: **`DICT_7X7_1000`** (config `aruco.dictionary`).
+- **Rover** marker ids: `11, 45, 51, 67, 101` (config `rovers.marker_ids` —
+  autonomous `11/45/51`, evasive `67/101`).
+- **Landing zones carry NO ArUco marker** — they are coordinate-only floor
+  markings; the referee detects ONLY rover markers (during AMBUSH).
 
 ## Run the example
 

@@ -48,8 +48,8 @@ from simcore.viz import TopDownView
 DEPLOY_PAD_INDEX = (0, 1, 2)        # drone i lands on designated pad i
 # Fixed observation hover points — each sits EXACTLY on a convoy-branch
 # waypoint so the rover pass times are deterministic config geometry.
-OBSERVE_STATIONS = ((6.5, 0.9), (7.0, 5.2), (2.2, 5.2))
-LOCKON_TARGETS = (0, 2, 3)          # drone i scripts against this rover
+OBSERVE_STATIONS = ((7.5, 0.60), (5.5, 0.72), (6.0, 4.90))
+LOCKON_TARGETS = (0, 1, 2)          # drone i scripts against this rover
 # Gradual lock-on keyframes: pitch eases down toward the approaching rover
 # and back as it passes underneath; position eases out-and-back in sync.
 LOCKON_PITCH_SEQ = (90, 84, 77, 70, 64, 70, 77, 84, 90)

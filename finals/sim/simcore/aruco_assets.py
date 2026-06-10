@@ -117,12 +117,12 @@ def ensure_quad_obj(marker_id: int, out_dir: str = "assets") -> str:
 
 
 def generate_all(cfg, out_dir: str = "assets", force: bool = True) -> dict:
-    """(Re)generate every configured marker (pad ids + rover ids).
+    """(Re)generate every ROVER marker PNG (pads carry NO ArUco marker).
 
     Returns {marker_id: png_path}.
     """
-    ids = [pad.id for pad in cfg.pads] + list(cfg.rovers.marker_ids)
+    ids = list(cfg.rovers.marker_ids)
     if len(set(ids)) != len(ids):
-        raise ValueError(f"pad/rover marker ids must be distinct: {ids}")
+        raise ValueError(f"rover marker ids must be distinct: {ids}")
     return {mid: ensure_marker_png(cfg, mid, out_dir, force=force)
             for mid in ids}

@@ -29,8 +29,8 @@ def cfg():
 
 
 def _expected_obstacle_count(cfg) -> int:
-    # one crate per authored cluster entry + 3 archway parts
-    return len(cfg.arena.authored.clusters) + 3
+    # one obstacle per authored structure entry (gates = 2 posts each)
+    return len(cfg.arena.authored.clusters)
 
 
 # --------------------------------------------------------------------------- #
@@ -65,36 +65,29 @@ def test_authored_clusters_at_configured_positions(cfg):
         assert o.z0_m == 0.0               # crates sit on the floor
 
 
-def test_archway_geometry(cfg):
+def test_arch_gates_are_post_pairs_on_the_floor(cfg):
+    # the 4 arch GATES are modelled as 8 solid posts (two cluster entries each),
+    # all ground boxes (z0 = 0) of the gate height — no elevated lintel body.
     layout = arena.generate(cfg)
-    arch = cfg.arena.authored.archway
-    p_west, p_east, lintel = layout.obstacles[-3:]
-    off = arch.width_m / 2 + arena._PILLAR_HALF_M
-    # two ground pillars flanking the configured corner point
-    for pillar, east in ((p_west, arch.corner[1] - off),
-                        (p_east, arch.corner[1] + off)):
-        assert pillar.north == pytest.approx(arch.corner[0])
-        assert pillar.east == pytest.approx(east)
-        assert pillar.z0_m == 0.0
-        assert pillar.height_m == pytest.approx(arch.height_m)
-    # the lintel spans the pillars, ELEVATED at the passage height
-    assert lintel.z0_m == pytest.approx(arch.height_m)
-    assert lintel.north == pytest.approx(arch.corner[0])
-    assert lintel.east == pytest.approx(arch.corner[1])
-    assert lintel.half_e == pytest.approx(off + arena._PILLAR_HALF_M)
-    # the passage under the lintel is genuinely open (clearance = height_m)
-    assert arch.height_m >= 1.0
+    posts = layout.obstacles[:8]           # the gate posts lead the authored list
+    assert all(o.z0_m == 0.0 for o in layout.obstacles)
+    assert all(o.height_m == pytest.approx(1.10) for o in posts)
+    # each pair shares a northing and is ~0.9 m apart along easting (open gap)
+    for a, b in zip(posts[0::2], posts[1::2]):
+        assert a.north == pytest.approx(b.north)
+        assert abs(a.east - b.east) == pytest.approx(0.74, abs=0.01)
 
 
 def test_pads_flags_and_positions(cfg):
     pads = cfg.pads
     assert len(pads) == 5
     flags = {p.id: (p.valid, p.designated) for p in pads}
-    assert flags[10] == (True, True)
     assert flags[11] == (True, True)
-    assert flags[12] == (True, True)
-    assert flags[13] == (False, False)     # the decoy/invalid pad
-    assert flags[14] == (True, False)      # valid but not chosen this episode
+    assert flags[45] == (True, True)
+    assert flags[51] == (True, True)
+    assert flags[67] == (False, False)     # invalid zone
+    assert flags[101] == (False, False)    # invalid zone
+    assert sum(1 for p in pads if p.valid) == 3   # PROVISIONAL 3 valid / 2 invalid
     assert sum(1 for p in pads if p.valid and p.designated) == 3
     assert len({p.id for p in pads}) == 5
 
@@ -153,15 +146,13 @@ def test_world_body_count_authored(cfg):
                     + len(cfg.pads))
         assert reg.body_count() == reg.bodies.total == expected
         assert len(reg.bodies.obstacles) == _expected_obstacle_count(cfg)
-        # the lintel body is up at the passage height in the world
-        lintel_id = reg.bodies.obstacles[-1]
+        # a ground structure body sits at half its height in the world
+        o0 = arena.generate(cfg).obstacles[0]
         import pybullet as p
         pos, _ = reg.run_on_sim_thread(
             lambda: p.getBasePositionAndOrientation(
-                lintel_id, physicsClientId=reg.client))
-        arch = cfg.arena.authored.archway
-        assert pos[2] == pytest.approx(
-            arch.height_m + arena._LINTEL_THICK_M / 2, abs=1e-6)
+                reg.bodies.obstacles[0], physicsClientId=reg.client))
+        assert pos[2] == pytest.approx(o0.height_m / 2, abs=1e-6)
     finally:
         reg.shutdown()
 

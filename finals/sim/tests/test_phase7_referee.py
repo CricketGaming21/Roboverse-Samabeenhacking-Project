@@ -228,12 +228,12 @@ def test_full_smoke_run_scores_and_reports_thrash():
     # Part 1: all three drones land on their designated pads within tolerance
     assert result["landing_score"] == 3
     pads = sorted(p for _d, p, _e, _t in result["landings"])
-    assert pads == [10, 11, 12]
+    designated = sorted(p.id for p in c.pads if p.valid and p.designated)
+    assert pads == designated
     assert all(err <= c.scoring.landing.tolerance_m
                for _d, _p, err, _t in result["landings"])
-    # Part 2: pads NEVER count as snapshot targets
-    pad_ids = {p.id for p in c.pads}
-    assert not pad_ids & {b[0] for b in result["banked"]}
+    # Part 2: only ROVER markers are banked (pads carry no marker)
+    assert set(b[0] for b in result["banked"]) <= set(c.rovers.marker_ids)
     assert sum(result["monitor"]["preemptions"].values()) >= 1  # thrash demo
     assert sum(result["monitor"]["rate_warnings"].values()) >= 1
     assert result["sim_time"] > 0

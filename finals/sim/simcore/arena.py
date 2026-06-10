@@ -170,35 +170,23 @@ def _place_rovers(cfg, rng, obstacles) -> tuple:
     return tuple(placed)
 
 
-_PILLAR_HALF_M = 0.15     # archway pillar footprint half-side
-_LINTEL_THICK_M = 0.3     # archway lintel thickness
-
-
 def _authored_obstacles(cfg) -> tuple:
-    """The fixed crates + archway from arena.authored — one ObstacleSpec per
-    authored crate (center / size / height), data-driven, no RNG."""
+    """The fixed authored structures from arena.authored — one ObstacleSpec per
+    entry (center / size / height), data-driven, no RNG. Arch gates are two
+    post entries each; the rest are solid structures."""
     au = cfg.arena.authored
     obstacles = []
     for ci, cl in enumerate(au.clusters):
         if len(cl.center) != 2 or len(cl.size) != 2:
-            raise ValueError(f"authored crate {ci}: center and size must each "
-                             f"be [north, east] pairs (got {cl})")
+            raise ValueError(f"authored structure {ci}: center and size must "
+                             f"each be [north, east] pairs (got {cl})")
         cn, ce = float(cl.center[0]), float(cl.center[1])
         sn, se = float(cl.size[0]), float(cl.size[1])
         if sn <= 0.0 or se <= 0.0 or float(cl.height) <= 0.0:
-            raise ValueError(f"authored crate {ci}: size and height must be "
-                             f"positive (got {cl})")
+            raise ValueError(f"authored structure {ci}: size and height must "
+                             f"be positive (got {cl})")
         obstacles.append(ObstacleSpec(cn, ce, sn / 2.0, se / 2.0,
                                       float(cl.height)))
-    arch = au.archway
-    an, ae = arch.corner
-    off = arch.width_m / 2.0 + _PILLAR_HALF_M  # pillar centres off the axis
-    obstacles.append(ObstacleSpec(an, ae - off, _PILLAR_HALF_M, _PILLAR_HALF_M,
-                                  float(arch.height_m)))
-    obstacles.append(ObstacleSpec(an, ae + off, _PILLAR_HALF_M, _PILLAR_HALF_M,
-                                  float(arch.height_m)))
-    obstacles.append(ObstacleSpec(an, ae, _PILLAR_HALF_M, off + _PILLAR_HALF_M,
-                                  _LINTEL_THICK_M, z0_m=float(arch.height_m)))
     _validate_authored(cfg, obstacles)
     return tuple(obstacles)
 

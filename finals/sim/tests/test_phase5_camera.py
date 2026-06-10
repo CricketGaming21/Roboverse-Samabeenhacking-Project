@@ -19,9 +19,8 @@ from simcore import aruco_assets
 from simcore.config import load_config
 from simcore.registry import get_registry, shutdown_registry
 
-# Drone 0 flies from its configured start to above pad cfg.pads[0]
+# Drone 0 flies from its configured start to above the parked rover
 # (takeoff frame at heading 0: x = right = east, y = forward = north).
-PAD_ID = 10
 
 
 @pytest.fixture()
@@ -32,7 +31,12 @@ def cfg():
     c.motion.realistic = False  # crisp snap motion: exact geometry under test
     c.arena.layout = "procedural"  # authored map off: clean sight lines
     c.arena.obstacles.count = 0
-    c.rovers.count = 0
+    # Pads carry NO marker (Phase 35); detection is tested on a PARKED rover
+    # marker on the floor instead.
+    c.rovers.count = 1
+    c.rovers.motion = "patrol"
+    c.rovers.patrol.speed_mps = 0.0
+    c.scenario.phases = "ambush"   # rover sits in-arena at its spawn
     return c
 
 
@@ -70,12 +74,13 @@ def _wait_frame(stream, timeout_s=5.0):
     pytest.fail("no video frame within timeout")
 
 
-def _stream_over_pad(cfg, d, pitch_deg=90):
-    pad = cfg.pads[0]
+def _stream_over_rover(sim, cfg, d, pitch_deg=90):
+    rn, re_ = sim.rover_arena_positions()[0]
     start = cfg.drones.units[0].start
     d.takeoff(150)
-    d.move_to((pad.east - start[1]) * 100.0,
-              (pad.north - start[0]) * 100.0, 150)  # above pad cfg.pads[0]
+    d.move_to((re_ - start[1]) * 100.0,
+              (rn - start[0]) * 100.0 - cfg.camera.mount_offset_m * 100.0,
+              150)                                    # above the parked rover
     d.set_camera_angle(CameraPitchMode.DOWN_ABSOLUTE, pitch_deg)
     stream = d.create_video_stream()
     d.set_video_stream(True)
@@ -87,39 +92,41 @@ def _stream_over_pad(cfg, d, pitch_deg=90):
 # Marker detection from rendered frames
 # --------------------------------------------------------------------------- #
 
-def test_pad_marker_detected_when_pitched_down(sim, cfg):
+def test_rover_marker_detected_when_pitched_down(sim, cfg):
+    rover_id = cfg.rovers.marker_ids[0]
     d = _connect(cfg)
-    stream = _stream_over_pad(cfg, d, pitch_deg=90)
+    stream = _stream_over_rover(sim, cfg, d, pitch_deg=90)
     try:
         frame = _wait_frame(stream)
         ids, corners = _detect_ids(cfg, frame.to_rgb())
-        assert PAD_ID in ids, f"pad id {PAD_ID} not decoded (saw {ids})"
-        quad = corners[ids.index(PAD_ID)]
+        assert rover_id in ids, f"rover id {rover_id} not decoded (saw {ids})"
+        quad = corners[ids.index(rover_id)]
         assert quad.shape == (1, 4, 2)  # exactly 4 corners
     finally:
         stream.stop()
 
 
 def test_pitch_matters(sim, cfg):
-    """The pad directly below is NOT in view at pitch 0, IS at pitch 90."""
+    """The rover directly below is NOT in view at pitch 0, IS at pitch 90."""
+    rover_id = cfg.rovers.marker_ids[0]
     d = _connect(cfg)
-    stream = _stream_over_pad(cfg, d, pitch_deg=0)  # forward-looking
+    stream = _stream_over_rover(sim, cfg, d, pitch_deg=0)  # forward-looking
     try:
-        # Give the stream a few frame periods, then check: no pad in view.
+        # Give the stream a few frame periods, then check: no rover in view.
         time.sleep(0.2)
         frame = _wait_frame(stream)
         ids, _ = _detect_ids(cfg, frame.to_rgb())
-        assert PAD_ID not in ids
+        assert rover_id not in ids
 
         d.set_camera_angle(CameraPitchMode.DOWN_ABSOLUTE, 90)
         deadline = time.time() + 5.0
         while time.time() < deadline:  # wait for a post-tilt frame
             ids, _ = _detect_ids(cfg, stream.latest_frame.to_rgb())
-            if PAD_ID in ids:
+            if rover_id in ids:
                 break
             time.sleep(0.02)
         else:
-            pytest.fail("pad never detected after pitching down")
+            pytest.fail("rover never detected after pitching down")
     finally:
         stream.stop()
 
@@ -130,7 +137,7 @@ def test_pitch_matters(sim, cfg):
 
 def test_frame_format_and_channel_order(sim, cfg):
     d = _connect(cfg)
-    stream = _stream_over_pad(cfg, d, pitch_deg=90)
+    stream = _stream_over_rover(sim, cfg, d, pitch_deg=90)
     try:
         frame = _wait_frame(stream)
         rgb, bgr = frame.to_rgb(), frame.to_bgr()

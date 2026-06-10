@@ -67,7 +67,7 @@ def test_landing_on_designated_pad_scores_with_distance_and_time():
         t_land = reg.sim_time()
         assert reg.landing_scorer.score() == 1
         r = reg.landing_scorer.results()[0]
-        assert (r.drone_index, r.pad_id, r.scored) == (0, 10, True)
+        assert (r.drone_index, r.pad_id, r.scored) == (0, cfg.pads[0].id, True)
         assert r.pad_valid and r.pad_designated
         assert r.error_m < 0.02                       # landed dead centre
         assert 0 < r.sim_time <= t_land               # time-to-land recorded
@@ -77,7 +77,7 @@ def test_landing_on_designated_pad_scores_with_distance_and_time():
         _land_at(d1, cfg, 1, pad11.north, pad11.east + 0.20)  # 20 cm off
         r1 = next(r for r in reg.landing_scorer.results()
                   if r.drone_index == 1)
-        assert r1.pad_id == 11 and r1.scored
+        assert r1.pad_id == cfg.pads[1].id and r1.scored
         assert r1.error_m == pytest.approx(0.20, abs=0.03)  # correct distance
         assert reg.landing_scorer.score() == 2
     finally:
@@ -89,15 +89,16 @@ def test_invalid_nondesignated_and_offpad_score_nothing():
     reg = get_registry(cfg)
     try:
         d = _connect(cfg, 0)
-        _land_at(d, cfg, 0, 5.5, 1.2)     # pad 13: the INVALID decoy
-        _land_at(d, cfg, 0, 2.0, 1.5)     # pad 14: valid but NOT designated
-        _land_at(d, cfg, 0, 7.0, 1.5)     # open floor: outside any tolerance
+        inv0, inv1 = cfg.pads[3], cfg.pads[4]   # the two INVALID zones (67, 101)
+        assert not inv0.valid and not inv1.valid
+        _land_at(d, cfg, 0, inv0.north, inv0.east)   # invalid decoy
+        _land_at(d, cfg, 0, inv1.north, inv1.east)   # invalid decoy
+        _land_at(d, cfg, 0, 1.0, 1.0)                # open floor: no pad in range
         assert reg.landing_scorer.score() == 0
         attempts = reg.landing_scorer.all_attempts()
         assert len(attempts) == 3         # every attempt recorded, none scored
-        assert [a.pad_id for a in attempts[:2]] == [13, 14]
-        assert attempts[0].pad_valid is False
-        assert attempts[1].pad_valid and not attempts[1].pad_designated
+        assert [a.pad_id for a in attempts[:2]] == [inv0.id, inv1.id]
+        assert attempts[0].pad_valid is False and attempts[1].pad_valid is False
         assert attempts[2].error_m > cfg.scoring.landing.tolerance_m
         assert all(not a.scored for a in attempts)
     finally:
@@ -130,16 +131,17 @@ def test_one_drone_per_pad_and_one_pad_per_drone():
 
 def test_fixed_assignment_mode():
     cfg = _cfg(assignment="fixed")
-    cfg.drones.units[0].pad_id = 11
+    assigned = cfg.pads[1].id                          # assign the 2nd pad
+    cfg.drones.units[0].pad_id = assigned
     reg = get_registry(cfg)
     try:
         d0 = _connect(cfg, 0)
-        pad10, pad11 = cfg.pads[0], cfg.pads[1]
-        _land_at(d0, cfg, 0, pad10.north, pad10.east)  # perfect — wrong pad
-        assert reg.landing_scorer.score() == 0         # assigned pad 11
-        _land_at(d0, cfg, 0, pad11.north, pad11.east)
+        pad_a, pad_b = cfg.pads[0], cfg.pads[1]
+        _land_at(d0, cfg, 0, pad_a.north, pad_a.east)  # perfect — wrong pad
+        assert reg.landing_scorer.score() == 0         # not the assigned pad
+        _land_at(d0, cfg, 0, pad_b.north, pad_b.east)
         assert reg.landing_scorer.score() == 1
-        assert reg.landing_scorer.results()[0].pad_id == 11
+        assert reg.landing_scorer.results()[0].pad_id == assigned
     finally:
         shutdown_registry()
 
@@ -230,7 +232,7 @@ def test_combined_scoreboard_lists_both_parts():
 
         board = format_combined_scoreboard(reg)
         assert "PART 1" in board and "PART 2" in board
-        assert "drone 0 -> pad 10" in board
+        assert f"drone 0 -> pad {cfg.pads[0].id}" in board
         assert "10.0cm" in board          # the 10 cm landing error
         assert f"id  {rover_id}" in board
         assert "drone 2" in board
