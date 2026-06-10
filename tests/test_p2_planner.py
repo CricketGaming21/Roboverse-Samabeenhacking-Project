@@ -122,6 +122,50 @@ def test_plan_none_when_goal_blocked():
     assert plan_path((1.0, 0.5), (5.0, 3.0), g) is None    # goal inside footprint
 
 
+# --------------------------------------------------------------------------- #
+# pad approach: an endpoint inside the inflated bubble but clear of the RAW
+# footprint (a designated pad hard against a thin arch post) is reachable via a
+# reduced-margin final approach — fixes the over-crate flag on pad ingress/egress.
+# --------------------------------------------------------------------------- #
+def test_plan_to_inflation_blocked_pad_via_reduced_approach():
+    bounds = Rect(0, 0, 10, 6)
+    foot = [(4.0, 1.33, 0.25, 0.16)]            # thin arch post (like the sim's)
+    inflated = inflate(foot, 0.40)              # the pad sits INSIDE this safety bubble
+    approach = inflate(foot, 0.15)              # but OUTSIDE this reduced-margin bubble
+    pad = (4.4, 1.35)                           # designated pad 11, clear of the raw post
+    assert point_blocked(pad, inflated) is True
+    assert point_blocked(pad, approach) is False
+
+    g0 = build_graph(inflated, bounds)          # no approach set → conservative: bails (unchanged)
+    assert plan_path((0.6, 0.6), pad, g0) is None
+
+    g = build_graph(inflated, bounds, approach=approach)
+    path = plan_path((0.6, 0.6), pad, g)
+    assert path is not None and path[-1] == pad
+    for i in range(len(path) - 1):              # every hop clears the reduced footprint
+        assert segment_clear(path[i], path[i + 1], approach)
+
+
+def test_plan_from_inflation_blocked_start_via_reduced_approach():
+    """Phase-2 egress: departing a pad that sits in the inflated bubble still routes out."""
+    bounds = Rect(0, 0, 10, 6)
+    foot = [(4.0, 1.33, 0.25, 0.16)]
+    inflated, approach = inflate(foot, 0.40), inflate(foot, 0.15)
+    g = build_graph(inflated, bounds, approach=approach)
+    path = plan_path((4.4, 1.35), (8.0, 4.0), g)        # pad 11 -> a far vantage
+    assert path is not None and path[0] == (4.4, 1.35)
+    for i in range(len(path) - 1):
+        assert segment_clear(path[i], path[i + 1], approach)
+
+
+def test_plan_raw_blocked_goal_still_none_with_approach():
+    """A goal inside the RAW footprint (truly inside an obstacle) is still refused."""
+    bounds = Rect(0, 0, 10, 6)
+    foot = [(5.0, 3.0, 0.9, 0.9)]
+    g = build_graph(inflate(foot, 0.40), bounds, approach=inflate(foot, 0.15))
+    assert plan_path((1.0, 0.5), (5.0, 3.0), g) is None
+
+
 def test_plan_on_real_arena_truth():
     arena = load_arena()
     bounds = Rect(0, 0, arena.length_m, arena.width_m)

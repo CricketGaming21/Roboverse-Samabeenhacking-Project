@@ -34,6 +34,8 @@ planner:
   arena_truth_file: config/arena_truth.yaml   # crates+arena emitted by the sim (emit_arena_truth); Discord coords play this role on the day
   inflate_m: 0.40            # crate footprint inflation = drone half-width + UWB + overshoot + barrier margin
   separation_min_m: 0.8      # inter-drone lateral separation (horizontal deconfliction)
+  pad_approach_inflate_m: 0.20   # reduced margin for a pad hard against a thin arch post (sim pad 11
+                             # sits 0.4 m from a post): final approach/departure stays raw-clear, no overfly
 
 aruco:
   # [SYNC-WITH-SIM] the sim now mirrors the REAL event exactly (DICT_7X7_1000 + real ids).

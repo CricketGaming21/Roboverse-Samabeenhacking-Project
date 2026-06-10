@@ -251,7 +251,10 @@ def build_live_mission(cfg, *, sleep, use_dola=False, real=False):
     bounds = Rect(0.0, 0.0, arena.length_m, arena.width_m)
     footprints = arena.footprint_tuples()
     inflated = inflate(footprints, cfg.planner.inflate_m)
-    graph = build_graph(inflated, bounds)
+    # reduced margin so a pad hard against a thin obstacle (e.g. arch post) is reachable via a
+    # raw-clear final approach; interior routing stays on the full inflation
+    approach = inflate(footprints, cfg.planner.pad_approach_inflate_m)
+    graph = build_graph(inflated, bounds, approach=approach)
     # vantages get EXTRA clearance so UWB noise + lock-on wander can't drift the drone
     # over a crate (ToF altitude-hold over a crate climbs and breaches the altitude cap).
     vant_inflated = inflate(footprints, cfg.planner.inflate_m + 0.3)

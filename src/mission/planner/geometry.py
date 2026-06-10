@@ -94,15 +94,24 @@ class VisibilityGraph:
     inflated: List[Rect]
     bounds: Rect
     adj: Dict[int, List[Tuple[int, float]]] = field(default_factory=dict)
+    # Reduced-margin footprints used ONLY to connect an endpoint that sits inside the full
+    # inflated bubble but clear of the raw obstacle (a designated pad hard against a thin arch
+    # post). Defaults to `inflated` → no relaxation, fully conservative routing.
+    approach: List[Rect] = field(default_factory=list)
 
     def _visible(self, a: Point, b: Point) -> bool:
         return segment_clear(a, b, self.inflated)
 
 
 def build_graph(inflated: Sequence[Rect], bounds: Rect,
-                corner_push: float = 0.02) -> VisibilityGraph:
+                corner_push: float = 0.02,
+                approach: Optional[Sequence[Rect]] = None) -> VisibilityGraph:
     """Visibility graph over inflated-footprint corners (pushed just outside their
-    rect, dropped if inside another footprint or out of bounds)."""
+    rect, dropped if inside another footprint or out of bounds).
+
+    `approach` (optional) is a reduced-margin footprint set used by `plan_path` to admit an
+    endpoint that lies inside the full inflated bubble but outside the raw obstacle — i.e. a
+    landing pad placed close to a thin obstacle. Interior routing always uses `inflated`."""
     inflated = list(inflated)
     nodes: List[Point] = []
     for r in inflated:
@@ -116,7 +125,8 @@ def build_graph(inflated: Sequence[Rect], bounds: Rect,
             if point_blocked(node, inflated):
                 continue
             nodes.append(node)
-    g = VisibilityGraph(nodes=nodes, inflated=inflated, bounds=bounds)
+    g = VisibilityGraph(nodes=nodes, inflated=inflated, bounds=bounds,
+                        approach=list(approach) if approach is not None else list(inflated))
     for i in range(len(nodes)):
         g.adj.setdefault(i, [])
         for j in range(i + 1, len(nodes)):
@@ -131,12 +141,26 @@ def plan_path(start: Point, goal: Point,
               graph: VisibilityGraph) -> Optional[List[Point]]:
     """A* over the visibility graph (start/goal added as temp nodes). Returns a
     footprint-clear waypoint list start..goal, or None if start/goal is blocked,
-    out of bounds, or no route exists."""
+    out of bounds, or no route exists.
+
+    An endpoint inside the full inflated bubble but clear of the reduced `approach` set (a
+    designated pad hard against a thin obstacle) is admitted: its OWN incident segments are
+    checked against `approach` (a short, raw-clear final approach), while every interior
+    segment still uses the full `inflated` set. An endpoint inside `approach` (truly inside
+    the obstacle) is still refused."""
+    inflated, approach = graph.inflated, (graph.approach or graph.inflated)
     if not graph.bounds.contains(start) or not graph.bounds.contains(goal):
         return None
-    if point_blocked(start, graph.inflated) or point_blocked(goal, graph.inflated):
+    if point_blocked(start, approach) or point_blocked(goal, approach):
         return None
-    if segment_clear(start, goal, graph.inflated):
+    # "relaxed": inside the full bubble, but clear of the reduced approach set
+    rs = point_blocked(start, inflated)
+    rg = point_blocked(goal, inflated)
+
+    def clearance(a_relaxed: bool, b_relaxed: bool) -> Sequence[Rect]:
+        return approach if (a_relaxed or b_relaxed) else inflated
+
+    if segment_clear(start, goal, clearance(rs, rg)):
         return [start, goal] if start != goal else [start]
 
     pts = list(graph.nodes) + [start, goal]
@@ -144,10 +168,12 @@ def plan_path(start: Point, goal: Point,
     adj: Dict[int, List[Tuple[int, float]]] = {i: list(v) for i, v in graph.adj.items()}
     for i in range(len(pts)):
         adj.setdefault(i, [])
-    # connect start & goal to every visible graph node (and to each other, already checked)
-    for temp in (s_idx, g_idx):
+    # connect start & goal to every visible graph node (graph nodes are never relaxed); a
+    # relaxed endpoint's incident segments use the reduced approach clearance
+    for temp, relaxed in ((s_idx, rs), (g_idx, rg)):
+        cset = clearance(relaxed, False)
         for j in range(len(graph.nodes)):
-            if segment_clear(pts[temp], pts[j], graph.inflated):
+            if segment_clear(pts[temp], pts[j], cset):
                 d = math.dist(pts[temp], pts[j])
                 adj[temp].append((j, d))
                 adj[j].append((temp, d))

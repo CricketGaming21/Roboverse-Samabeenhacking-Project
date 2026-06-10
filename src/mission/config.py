@@ -62,6 +62,10 @@ class PlannerCfg(_Base):
     arena_truth_file: str
     inflate_m: float
     separation_min_m: float
+    # Reduced footprint margin used ONLY for a pad's final approach/departure when the pad sits
+    # inside the full inflated bubble of a thin obstacle (e.g. an arch post). Keeps pad ingress/
+    # egress raw-clear without overflying. Defaults so older/real profiles load unchanged.
+    pad_approach_inflate_m: float = 0.20
 
 
 class ArucoCfg(_Base):
