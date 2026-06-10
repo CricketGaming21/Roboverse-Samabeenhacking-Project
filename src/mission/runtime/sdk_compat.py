@@ -31,6 +31,13 @@ def prepare_manual_control(drone, velocity_level: Optional[int] = None) -> None:
         _try(drone, "set_velocity_level", velocity_level)
 
 
+def prepare_telemetry(drone) -> None:
+    """Real-SDK init for READ-ONLY telemetry: app mode + one heartbeat so data flows.
+    **NEVER arms** (no motion) — for bring-up checks. No-op on the sim; real on hardware."""
+    _try(drone, "set_app_mode", 1)
+    _try(drone, "send_app_heartbeat")
+
+
 def send_heartbeat(drone) -> None:
     """Heartbeat tick (real SDK only); no-op on the sim."""
     _try(drone, "send_app_heartbeat")
