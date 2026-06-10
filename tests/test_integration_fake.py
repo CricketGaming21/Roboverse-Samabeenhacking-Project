@@ -165,15 +165,37 @@ def test_worker_death_zone_reassigned(monkeypatch):
 # --------------------------------------------------------------------------- #
 # discovery
 # --------------------------------------------------------------------------- #
-def test_discovery_fixed_ips_resolve_to_tags():
-    disc = Discovery(fixed_ips={0: "10.0.0.11", 1: "10.0.0.12", 2: "10.0.0.13"})
+def test_discovery_config_first_resolves_tags():
+    disc = Discovery.from_config(load_config())          # in-sim default: no Dola call
     assert disc.resolve() == {0: "10.0.0.11", 1: "10.0.0.12", 2: "10.0.0.13"}
 
 
-def test_discovery_via_dola(world):
-    disc = Discovery()                                  # no fixed ips → pyhulax.discovery.Dola
-    assert disc.get_all_ips() == world.ip_map
-    assert disc.resolve()[1] == world.ip_map[1]
+def test_discovery_falls_back_to_config_when_dola_stubbed(monkeypatch):
+    """The sim's Dola raises NotImplementedError — even use_dola=True must fall back."""
+    import mission.runtime.discovery as disc_mod
+
+    class StubDola:                                      # mirrors the sim's broken Dola
+        def __init__(self, *a, **k):
+            pass
+
+        def start(self):
+            raise NotImplementedError
+
+        def stop(self):
+            pass
+
+        def get_all_ips(self, *a, **k):
+            raise NotImplementedError
+
+    monkeypatch.setattr(disc_mod, "_resolve_dola", lambda: StubDola)
+    disc = Discovery.from_config(load_config(), use_dola=True)
+    assert disc.resolve() == {0: "10.0.0.11", 1: "10.0.0.12", 2: "10.0.0.13"}
+
+
+def test_discovery_uses_dola_when_available(world):
+    """On the real day Dola works; use_dola maps plane_id→tag_id (fake Dola here)."""
+    disc = Discovery.from_config(load_config(), use_dola=True)
+    assert disc.resolve() == world.ip_map
 
 
 # --------------------------------------------------------------------------- #

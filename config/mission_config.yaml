@@ -24,6 +24,12 @@ uwb:
   hold_on_dropout: true      # on (None,None,None): hold position, never lurch
   tag_ids: [0, 1, 2]         # [SYNC-WITH-SIM] one UWB tag per drone
 
+drones:                      # [SYNC-WITH-SIM] mirrors sim drones.units: control IP <-> UWB tag <-> arena start (north,east) m.
+  # Discovery resolves IP<->tag from THIS (the sim's Dola raises NotImplementedError); Dola is opt-in for the real day.
+  - { ip: "10.0.0.11", tag_id: 0, start: [0.6, 1.1] }
+  - { ip: "10.0.0.12", tag_id: 1, start: [0.6, 0.6] }
+  - { ip: "10.0.0.13", tag_id: 2, start: [1.1, 0.6] }
+
 planner:
   arena_truth_file: config/arena_truth.yaml   # crates+arena emitted by the sim (emit_arena_truth); Discord coords play this role on the day
   inflate_m: 0.40            # crate footprint inflation = drone half-width + UWB + overshoot + barrier margin

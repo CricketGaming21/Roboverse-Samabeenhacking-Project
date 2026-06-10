@@ -100,11 +100,21 @@ class EvaderCfg(_Base):
     contain_with_chokepoints: bool
 
 
+class DroneUnitCfg(_Base):
+    """One drone: control IP ↔ UWB tag id ↔ arena start (north, east) m.
+    Mirrors the sim's `drones.units` so discovery resolves from config in-sim
+    (the sim's `Dola` raises NotImplementedError — see runtime/discovery.py)."""
+    ip: str
+    tag_id: int
+    start: List[float]
+
+
 class MissionConfig(_Base):
     meta: MetaCfg
     frame: FrameCfg
     speed: SpeedCfg
     uwb: UwbCfg
+    drones: List[DroneUnitCfg]
     planner: PlannerCfg
     aruco: ArucoCfg
     camera: CameraCfg
@@ -115,6 +125,15 @@ class MissionConfig(_Base):
 
     def valid_pads(self) -> List[PadCfg]:
         return [p for p in self.pads if p.valid]
+
+    def drone_units(self) -> List[DroneUnitCfg]:
+        return list(self.drones)
+
+    def ip_for_tag(self) -> dict:
+        return {u.tag_id: u.ip for u in self.drones}
+
+    def starts_by_tag(self) -> dict:
+        return {u.tag_id: (u.start[0], u.start[1]) for u in self.drones}
 
 
 def load_config(path=None) -> MissionConfig:
