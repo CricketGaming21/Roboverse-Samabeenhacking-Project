@@ -39,6 +39,10 @@ def fly_to_uwb(drone, uwb, tag_id: int, target_xy_m: Tuple[float, float], *,
     dt = 1.0 / rate_hz if rate_hz > 0 else 0.05
     prev_xy: Optional[Tuple[float, float]] = None
     prev_t: Optional[float] = None
+    # arrival: a UWB-derived speed gate (clean/fast) OR a position-dwell fallback
+    # (robust to the real 10 Hz + 5 cm UWB whose instantaneous speed is too noisy).
+    settle = 0
+    settle_steps = max(3, int(0.4 * rate_hz))
 
     for step in range(max_steps):
         x, y, t = uwb.get_tag_position(tag_id)
@@ -73,7 +77,8 @@ def fly_to_uwb(drone, uwb, tag_id: int, target_xy_m: Tuple[float, float], *,
                 uwb_speed = math.hypot(x - prev_xy[0], y - prev_xy[1]) / ddt
         prev_xy, prev_t = (x, y), t
 
-        if err_dist <= tol_m and uwb_speed <= speed_tol_mps:
+        settle = settle + 1 if err_dist <= tol_m else 0
+        if err_dist <= tol_m and (uwb_speed <= speed_tol_mps or settle >= settle_steps):
             drone.send_manual_control(0.0, 0.0, up_stick, 0.0)   # settle, hold alt
             if on_step is not None:
                 on_step({"step": step, "arrived": True, "err": err_dist})

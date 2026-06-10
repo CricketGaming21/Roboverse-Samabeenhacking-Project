@@ -140,3 +140,207 @@ class Mission:
                                  workers=self.workers)
         finally:
             self.shutdown()
+
+
+# --------------------------------------------------------------------------- #
+# Runnable entrypoint: python -m mission.runtime.main  (against the sim/real)
+# --------------------------------------------------------------------------- #
+class _PlanView:
+    """Duck-typed plan the Mission consumes — routes auto-planned, vantages a general
+    overwatch grid (the mission does NOT know the convoy routes on the real day)."""
+
+    def __init__(self, pad_ids, routes, vantages):
+        self._pad_ids = pad_ids
+        self._routes = routes
+        self._vantages = vantages
+
+    def pad_assignment(self):
+        return dict(self._pad_ids)
+
+    def route(self, tag):
+        return list(self._routes[tag])
+
+    def vantages(self, tag):
+        return list(self._vantages[tag])
+
+    def bubble(self, tag):
+        return None                      # no zone-gating for the baseline convoy run
+
+
+def _nn_order(start, pts):
+    """Nearest-neighbour tour from `start` over `pts` (cheap patrol ordering)."""
+    import math
+    remaining = list(pts)
+    out, cur = [], start
+    while remaining:
+        nxt = min(remaining, key=lambda p: math.hypot(p[0] - cur[0], p[1] - cur[1]))
+        out.append(nxt)
+        remaining.remove(nxt)
+        cur = nxt
+    return out
+
+
+def overwatch_vantages(bounds, inflated, pad_by_tag, *, gimbal_deg=90.0, dwell_s=1.0,
+                       step_n=1.6, step_e=1.4):
+    """A grid of nadir overwatch points clear of inflated footprints, assigned to the
+    nearest drone's pad and ordered into a patrol. General search — not convoy-tuned."""
+    import math
+
+    from mission.planner.geometry import point_blocked
+    pts = []
+    n = bounds.min_n + 1.5
+    while n <= bounds.max_n - 1.0:
+        e = bounds.min_e + 1.0
+        while e <= bounds.max_e - 0.8:
+            p = (round(n, 2), round(e, 2))
+            if not point_blocked(p, inflated):          # keep the drone off footprints
+                pts.append(p)
+            e += step_e
+        n += step_n
+    groups = {tag: [] for tag in pad_by_tag}
+    for p in pts:
+        tag = min(pad_by_tag, key=lambda t: math.hypot(p[0] - pad_by_tag[t][0],
+                                                       p[1] - pad_by_tag[t][1]))
+        groups[tag].append(p)
+    return {tag: [{"xy": p, "look_yaw_deg": 0, "gimbal_deg": gimbal_deg,
+                   "dwell_s": dwell_s}
+                  for p in _nn_order(pad_by_tag[tag], gp)]
+            for tag, gp in groups.items()}
+
+
+def build_live_mission(cfg, *, sleep, use_dola=False):
+    """Wire discovery → connect → UWB → workers for a live (sim/real) run."""
+    import pyhulax
+    from UWBParserThread import UWBParserThread
+
+    from mission.planner.arena import load_arena
+    from mission.planner.geometry import Rect, build_graph, inflate, plan_path
+    from mission.planner.projection import CameraIntrinsics
+    from mission.mission.phase1_land import assign_pads
+    from mission.runtime.discovery import Discovery
+
+    arena = load_arena()
+    bounds = Rect(0.0, 0.0, arena.length_m, arena.width_m)
+    footprints = arena.footprint_tuples()
+    inflated = inflate(footprints, cfg.planner.inflate_m)
+    graph = build_graph(inflated, bounds)
+
+    ips = Discovery.from_config(cfg, use_dola=use_dola).resolve()    # {tag: ip}
+    starts = cfg.starts_by_tag()
+
+    drones, streams = {}, {}
+    for tag in sorted(ips):
+        d = pyhulax.DroneAPI()
+        d.connect(ips[tag])
+        sdk_compat.prepare_manual_control(d, velocity_level=None)
+        d.set_video_stream(True)
+        s = d.create_video_stream()
+        s.start()
+        drones[tag], streams[tag] = d, s
+    uwb = UWBParserThread()
+    uwb.start()
+
+    designated = cfg.designated_pads()
+    assignment = assign_pads(designated, {t: starts[t] for t in drones})   # {tag: PadCfg}
+    pad_ids = {t: assignment[t].id for t in assignment}
+    pad_coords = {assignment[t].id: (assignment[t].north, assignment[t].east)
+                  for t in assignment}
+    pad_by_tag = {t: pad_coords[pad_ids[t]] for t in assignment}
+
+    routes = {}
+    for t in sorted(drones):
+        path = plan_path(starts[t], pad_by_tag[t], graph)
+        routes[t] = path if path else [starts[t], pad_by_tag[t]]
+
+    vantages = overwatch_vantages(bounds, inflated, pad_by_tag)
+    plan = _PlanView(pad_ids, routes, vantages)
+    intr = CameraIntrinsics(cfg.camera.width, cfg.camera.height, cfg.camera.h_fov_deg)
+    return drones, streams, uwb, pad_coords, footprints, intr, plan, starts
+
+
+def _report(cfg, mission, pad_coords, plan, uwb, footprints, rover_ids):
+    """Mission-side honest report (the authoritative referee lives in the sim's
+    DebugProbe, which mission code may not import — the @integration test cross-checks it)."""
+    import math
+    lines = ["", "=" * 64, "MISSION REPORT (mission-side telemetry)", "=" * 64]
+    pad_ids = plan.pad_assignment()
+    landed = 0
+    for tag in sorted(mission.workers):
+        w = mission.workers[tag]
+        pad_id = pad_ids[tag]
+        px, py = pad_coords[pad_id]
+        x, y, _ = uwb.get_tag_position(tag)
+        if x is None:
+            lines.append(f"  drone {tag}: pad {pad_id}  UWB=DROPOUT  state={w.state}")
+            continue
+        err = math.hypot(x - px, y - py)
+        in_hoop = err <= 0.30 and w.state.value == "LANDED"
+        landed += int(in_hoop)
+        lines.append(f"  drone {tag}: pad {pad_id} land_err={err * 100:5.1f}cm "
+                     f"{'IN-HOOP' if in_hoop else 'OUT'}  state={w.state.value}  "
+                     f"err={w.error}")
+    tagged = sorted(mission.state.tagged())
+    distinct = sorted(set(tagged) & set(rover_ids))
+    lines.append("-" * 64)
+    lines.append(f"  LANDINGS in-hoop (0.30 m): {landed}/3")
+    lines.append(f"  STAGE-2 distinct rover ids tagged: {distinct}  "
+                 f"({len(distinct)}/{len(rover_ids)})")
+    lines.append(f"  all banked ids (incl. non-convoy): {tagged}")
+    # self-checked compliance: any trace point over a raw crate footprint
+    viol = []
+    for tag, w in mission.workers.items():
+        for p in w.trace:
+            if any(abs(p[0] - cn) < sn / 2 and abs(p[1] - ce) < se / 2
+                   for cn, ce, sn, se in footprints):
+                viol.append(tag)
+                break
+    lines.append(f"  self-checked over-crate compliance flags: "
+                 f"{sorted(set(viol)) if viol else 'none'}")
+    lines.append("=" * 64)
+    print("\n".join(lines), flush=True)
+
+
+def main(argv=None) -> int:
+    import os
+    import time
+
+    from mission.config import load_config
+
+    cfg = load_config()
+    rover_ids = [int(x) for x in os.environ.get(
+        "HULA_ROVER_IDS", "20,21,22,23,24").split(",")]
+    cycles = int(os.environ.get("HULA_PHASE2_CYCLES", "3"))
+    dwell = float(os.environ.get("HULA_PHASE2_DWELL_S", "1.0"))
+    use_dola = bool(os.environ.get("HULA_USE_DOLA"))
+
+    drones, streams, uwb, pad_coords, footprints, intr, plan, starts = \
+        build_live_mission(cfg, sleep=time.sleep, use_dola=use_dola)
+
+    mission = Mission(cfg, plan, drones=drones, uwb=uwb, streams=streams,
+                      pad_coords=pad_coords, footprints=footprints,
+                      all_rover_ids=rover_ids, intrinsics=intr, sleep=time.sleep,
+                      phase2_kwargs={"budget_cycles": cycles, "dwell_s": dwell,
+                                     "mopup_extra_cycles": 1, "gimbal_deg": 90,
+                                     "lock_timeout_s": cfg.failsafe.lock_timeout_s})
+    try:
+        print(f"[main] connected {sorted(drones)}; landing on pads "
+              f"{plan.pad_assignment()}", flush=True)
+        landings = mission.run_phase1(parallel=True)
+        print(f"[main] phase 1 done: {landings}; waiting for convoy "
+              f"(on_all_landed trigger)…", flush=True)
+        time.sleep(4.0)                              # let the ambush trigger + convoy enter
+        mission.run_phase2(parallel=True)
+    finally:
+        mission.shutdown()
+        try:
+            uwb.stop()
+        except Exception:
+            pass
+        for d in drones.values():
+            sdk_compat.release(d)
+    _report(cfg, mission, pad_coords, plan, uwb, footprints, rover_ids)
+    return 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

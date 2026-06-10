@@ -81,6 +81,7 @@ class PadCfg(_Base):
     north: float
     east: float
     valid: bool
+    designated: bool = False        # [SYNC-WITH-SIM] one of the briefed "Land" targets
 
 
 class LandingCfg(_Base):
@@ -125,6 +126,10 @@ class MissionConfig(_Base):
 
     def valid_pads(self) -> List[PadCfg]:
         return [p for p in self.pads if p.valid]
+
+    def designated_pads(self) -> List[PadCfg]:
+        """Valid AND designated pads — the only ones part-1 scoring counts."""
+        return [p for p in self.pads if p.valid and p.designated]
 
     def drone_units(self) -> List[DroneUnitCfg]:
         return list(self.drones)
