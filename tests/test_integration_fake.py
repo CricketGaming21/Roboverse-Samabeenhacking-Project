@@ -198,6 +198,48 @@ def test_discovery_uses_dola_when_available(world):
     assert disc.resolve() == world.ip_map
 
 
+def test_discovery_resolve_ordered_maps_discovered_to_tags_in_order(monkeypatch):
+    """Deck slide-6: discovered drones map to the configured tag_ids IN ORDER (by plane_id)."""
+    import mission.runtime.discovery as disc_mod
+
+    class OrderDola:
+        def __init__(self, *a, **k):
+            pass
+
+        def start(self):
+            pass
+
+        def stop(self):
+            pass
+
+        def get_all_ips(self, *a, **k):
+            return {7: "ipA", 3: "ipB", 9: "ipC"}      # plane_ids NOT in tag order
+
+    monkeypatch.setattr(disc_mod, "_resolve_dola", lambda: OrderDola)
+    logs = []
+    mapping = Discovery.from_config(load_config(), use_dola=True).resolve_ordered(log=logs.append)
+    assert mapping == {0: "ipB", 1: "ipA", 2: "ipC"}   # planes 3,7,9 sorted → tags 0,1,2
+    assert any("tag 0" in line for line in logs)        # mapping was logged
+
+
+def test_discovery_resolve_ordered_falls_back_to_config(monkeypatch):
+    import mission.runtime.discovery as disc_mod
+
+    class StubDola:
+        def __init__(self, *a, **k):
+            pass
+
+        def start(self):
+            raise NotImplementedError
+
+        def get_all_ips(self, *a, **k):
+            raise NotImplementedError
+
+    monkeypatch.setattr(disc_mod, "_resolve_dola", lambda: StubDola)
+    mapping = Discovery.from_config(load_config(), use_dola=True).resolve_ordered()
+    assert mapping == {0: "10.0.0.11", 1: "10.0.0.12", 2: "10.0.0.13"}
+
+
 # --------------------------------------------------------------------------- #
 # real-sim integration (implemented; excluded from the gate)
 # --------------------------------------------------------------------------- #

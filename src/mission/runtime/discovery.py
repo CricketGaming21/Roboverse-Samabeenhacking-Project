@@ -68,3 +68,27 @@ class Discovery:
             except NotImplementedError:
                 pass                                   # sim stub → fall back to config
         return self._config_map()
+
+    def resolve_ordered(self, log=None) -> Dict[int, str]:
+        """Real-day (deck slide-6): Dola-discover, then map the discovered drones to the
+        configured tag_ids **in order** (sorted by plane_id), regardless of the plane_id
+        values. Logs the chosen ip↔tag pairing. Falls back to the config map if Dola is
+        unavailable (the sim stub raises). Operator confirms the pairing on the day."""
+        tag_ids = sorted(tag for _ip, tag in self._units)
+        plane_ips: Dict[int, str] = {}
+        try:
+            plane_ips = self._dola_ips()               # {plane_id: ip}
+        except NotImplementedError:
+            plane_ips = {}
+        if plane_ips:
+            ordered = [ip for _pid, ip in sorted(plane_ips.items())]
+            mapping = {tag_ids[i]: ordered[i]
+                       for i in range(min(len(tag_ids), len(ordered)))}
+        else:
+            mapping = self._config_map()               # fallback (sim / no Dola)
+        if log is not None:
+            log(f"discovery: {len(plane_ips)} drone(s) found via Dola"
+                if plane_ips else "discovery: Dola unavailable — using config IP map")
+            for tag in sorted(mapping):
+                log(f"  tag {tag}  <->  {mapping[tag]}")
+        return mapping
