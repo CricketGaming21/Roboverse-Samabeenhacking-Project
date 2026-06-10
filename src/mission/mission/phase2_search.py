@@ -52,17 +52,27 @@ def _alt_up(drone, alt_m: float, kp_alt: float = 0.8, climb_mps: float = 0.5) ->
     return max(-1.0, min(1.0, v / climb_mps if climb_mps > 0 else 0.0))
 
 
-def _marker_xy(bbox, drone, gimbal_deg: float, intr: Optional[CameraIntrinsics],
-               alt_m: Optional[float]) -> Point:
-    if intr is None:
-        return (drone.n, drone.e)
+def drone_arena_xy(drone, uwb=None, tag_id: Optional[int] = None) -> Optional[Point]:
+    """Drone arena (north,east) from UWB (real + sim). Falls back to the fake's truth
+    attrs only when UWB has no fix — NEVER assumes the real DroneAPI exposes `.n`/`.e`."""
+    if uwb is not None and tag_id is not None:
+        x, y, _ = uwb.get_tag_position(tag_id)
+        if x is not None and y is not None:
+            return (x, y)
+    n, e = getattr(drone, "n", None), getattr(drone, "e", None)
+    return (n, e) if n is not None and e is not None else None
+
+
+def _marker_xy(bbox, cam_xy: Optional[Point], yaw_deg: float, alt_m: float,
+               gimbal_deg: float, intr: Optional[CameraIntrinsics]) -> Optional[Point]:
+    """Project a marker bbox centre to the floor, given the drone's UWB camera position."""
+    if intr is None or cam_xy is None:
+        return cam_xy
     x, y, w, h = bbox
-    a = alt_m if alt_m is not None else drone.get_altitude() / 100.0
     try:
-        return pixel_to_arena(x + w / 2, y + h / 2, (drone.n, drone.e),
-                              drone.get_orientation().yaw, a, gimbal_deg, intr)
+        return pixel_to_arena(x + w / 2, y + h / 2, cam_xy, yaw_deg, alt_m, gimbal_deg, intr)
     except ValueError:
-        return (drone.n, drone.e)
+        return cam_xy
 
 
 # --------------------------------------------------------------------------- #
@@ -72,7 +82,8 @@ def lock_and_tag(drone, stream, detection, state, *, hold_frames: int = 5,
                  center_tol_px: int = 45, lock_timeout_s: float = 6.0,
                  rate_hz: float = 20.0, kp_px: float = 0.02, gimbal_deg: float = 90.0,
                  max_mps: float = 0.5, alt_m: float = 1.1,
-                 intrinsics: Optional[CameraIntrinsics] = None,
+                 intrinsics: Optional[CameraIntrinsics] = None, uwb=None,
+                 tag_id: Optional[int] = None,
                  dictionary: str = "DICT_6X6_250", sleep=time.sleep,
                  should_stop: Optional[Callable[[], bool]] = None,
                  clock: Callable[[], float] = time.time, on_step=None) -> bool:
@@ -109,7 +120,9 @@ def lock_and_tag(drone, stream, detection, state, *, hold_frames: int = 5,
         if math.hypot(ex, ey) <= center_tol_px:
             held += 1
             if held >= hold_frames:
-                xy = _marker_xy(match.bbox, drone, gimbal_deg, intr, alt_m)
+                cam_xy = drone_arena_xy(drone, uwb, tag_id)
+                xy = _marker_xy(match.bbox, cam_xy, drone.get_orientation().yaw,
+                                drone.get_altitude() / 100.0, gimbal_deg, intr)
                 state.bank(target_id, rgb, xy, clock())
                 drone.send_manual_control(0.0, 0.0, up, 0.0)
                 return True
@@ -177,20 +190,24 @@ def phase2_search(drone, uwb, tag_id: int, vantages: Sequence[dict], stream, sta
         frame = stream.latest_frame
         if frame is None:
             return False
+        cam_xy = drone_arena_xy(drone, uwb, tag_id)
         for d in confirm_with_aruco(frame.to_rgb()):
             mid = d.marker_id
             if mid is None or not is_rover_id(mid) or state.is_tagged(mid):
                 continue
-            xy = _marker_xy(d.bbox, drone, gimbal_deg, intrinsics, alt_m)
-            taskboard.see(Track(marker_id=mid, xy=xy, t=clock()))
-            if bubble is not None and not flags["mopup"] and not point_in_poly(xy, bubble):
+            xy = _marker_xy(d.bbox, cam_xy, drone.get_orientation().yaw,
+                            drone.get_altitude() / 100.0, gimbal_deg, intrinsics)
+            taskboard.see(Track(marker_id=mid, xy=xy if xy is not None else cam_xy,
+                                t=clock()))
+            if (bubble is not None and not flags["mopup"]
+                    and (xy is None or not point_in_poly(xy, bubble))):
                 continue                                  # gated out of our zone (logged)
             # commitment: a started lock runs to completion (bounded)
             if lock_and_tag(drone, stream, d, state, hold_frames=hold_frames,
                             center_tol_px=center_tol_px, lock_timeout_s=lock_timeout_s,
                             rate_hz=rate_hz, kp_px=kp_px, gimbal_deg=gimbal_deg,
-                            intrinsics=intrinsics, alt_m=alt_m, sleep=sleep,
-                            clock=clock, on_step=on_step):
+                            intrinsics=intrinsics, uwb=uwb, tag_id=tag_id, alt_m=alt_m,
+                            sleep=sleep, clock=clock, on_step=on_step):
                 banked.add(mid)
             return done()                                 # one target per scan frame
         return done()

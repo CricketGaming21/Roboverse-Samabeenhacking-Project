@@ -320,8 +320,7 @@ def main(argv=None) -> int:
                       pad_coords=pad_coords, footprints=footprints,
                       all_rover_ids=rover_ids, intrinsics=intr, sleep=time.sleep,
                       phase2_kwargs={"budget_cycles": cycles, "dwell_s": dwell,
-                                     "mopup_extra_cycles": 1, "gimbal_deg": 90,
-                                     "lock_timeout_s": cfg.failsafe.lock_timeout_s})
+                                     "mopup_extra_cycles": 1, "gimbal_deg": 90})
     try:
         print(f"[main] connected {sorted(drones)}; landing on pads "
               f"{plan.pad_assignment()}", flush=True)

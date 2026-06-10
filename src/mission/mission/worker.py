@@ -82,17 +82,25 @@ class DroneWorker:
         self.state = s
         self.history.append(s)
 
+    def _drone_xy(self) -> Optional[Point]:
+        """Arena (north,east) from UWB (real + sim). Falls back to the fake's truth attrs
+        only if UWB has no fix — NEVER assumes the real DroneAPI exposes `.n`/`.e`."""
+        x, y, _ = self.uwb.get_tag_position(self.tag_id)
+        if x is not None and y is not None:
+            return (x, y)
+        n, e = getattr(self.drone, "n", None), getattr(self.drone, "e", None)
+        return (n, e) if n is not None and e is not None else None
+
     def _on_step(self, info: dict) -> None:
-        self.trace.append((self.drone.n, self.drone.e))
+        xy = self._drone_xy()
+        if xy is not None:
+            self.trace.append(xy)
         if self.battery_rtl_pct is not None and \
                 self.drone.get_battery() <= self.battery_rtl_pct:
             raise FailsafeAbort("battery_rtl")        # safe return-and-land
 
     def _current_xy(self) -> Point:
-        x, y, _ = self.uwb.get_tag_position(self.tag_id)
-        if x is None or y is None:
-            return (self.drone.n, self.drone.e)
-        return (x, y)
+        return self._drone_xy() or (0.0, 0.0)
 
     def _route_to(self, pad_xy: Point, route: Optional[Sequence[Point]]) -> List[Point]:
         if route is not None:
