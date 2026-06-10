@@ -64,6 +64,18 @@ class VelocityLevel(IntEnum):
     TURBO = 50
 
 
+# Raw real-world speed band per level (m/s), matching the sim's velocity_levels table.
+# The enum INTS above are firmware P-gain divisors (unchanged); these are the speeds the
+# sim maps by NAME. ZOOM/TURBO (0.8/1.0) exceed the 0.5 cap — the fake (like the sim) HARD
+# CLAMPS every level to max_mps so no VelocityLevel can ever exceed 0.5 m/s.
+VELOCITY_LEVEL_RAW_MPS = {
+    VelocityLevel.SLOW: 0.3,
+    VelocityLevel.MEDIUM: 0.5,
+    VelocityLevel.ZOOM: 0.8,
+    VelocityLevel.TURBO: 1.0,
+}
+
+
 class BarrierMask(IntEnum):
     ALL = 0
     HORIZONTAL = 1     # the clean "never climb" mask
@@ -161,6 +173,7 @@ class FakeWorld:
     barrier_range_m: float = 0.6    # horizontal IR/ToF range
     down_range_cm: float = 40.0     # down sensor trips this close to ground
     min_sense_alt_cm: float = 35.0  # horizontal sensors inactive below this
+    climb_cmps: float = 50.0        # vertical speed for move(UP/DOWN), cm/s
 
     # camera intrinsics
     cam_w: int = 640
@@ -203,6 +216,15 @@ class FakeWorld:
 
     def all_markers(self) -> List[Marker]:
         return list(self.pads) + list(self.rovers)
+
+    def velocity_mps(self, level) -> float:
+        """m/s for a VelocityLevel, HARD-clamped to max_mps (every level ≤ 0.5)."""
+        try:
+            lvl = level if isinstance(level, VelocityLevel) else VelocityLevel(int(level))
+        except (ValueError, TypeError):
+            return self.max_mps
+        raw = VELOCITY_LEVEL_RAW_MPS.get(lvl, self.max_mps)
+        return min(raw, self.max_mps)
 
 
 def default_world() -> FakeWorld:
@@ -414,19 +436,24 @@ class FakeDroneAPI:
     def move(self, direction: int, distance_cm: float,
              speed: int = VelocityLevel.ZOOM) -> CommandResult:
         d = distance_cm / 100.0
-        yaw = math.radians(self.yaw_deg)
-        if direction == Direction.FORWARD:
-            self._translate(d, 0.0)
-        elif direction == Direction.BACK:
-            self._translate(-d, 0.0)
-        elif direction == Direction.RIGHT:
-            self._translate(0.0, d)
-        elif direction == Direction.LEFT:
-            self._translate(0.0, -d)
+        if direction in (Direction.FORWARD, Direction.BACK,
+                         Direction.RIGHT, Direction.LEFT):
+            spd = self._world.velocity_mps(speed)          # ≤ max_mps (0.5), always
+            if direction == Direction.FORWARD:
+                self._translate(d, 0.0)
+            elif direction == Direction.BACK:
+                self._translate(-d, 0.0)
+            elif direction == Direction.RIGHT:
+                self._translate(0.0, d)
+            else:
+                self._translate(0.0, -d)
+            self._world.clock += abs(d) / spd if spd > 0 else 0.0   # time at clamped speed
         elif direction == Direction.UP:
             self.alt_cm += distance_cm
+            self._world.clock += abs(distance_cm) / self._world.climb_cmps
         elif direction == Direction.DOWN:
             self.alt_cm = max(0.0, self.alt_cm - distance_cm)
+            self._world.clock += abs(distance_cm) / self._world.climb_cmps
         return CommandResult(True, "move")
 
     def rotate(self, angle_degrees: float) -> CommandResult:

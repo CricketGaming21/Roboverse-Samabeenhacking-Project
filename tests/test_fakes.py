@@ -66,6 +66,29 @@ def test_manual_control_returns_bool(drone):
     assert drone.send_manual_control(forward=0.5) is True
 
 
+def test_velocity_level_clamps_to_cap(world):
+    # raw band matches the sim (SLOW 0.3, MEDIUM 0.5, ZOOM 0.8, TURBO 1.0) but every
+    # level HARD-clamps to max_mps (0.5) — ZOOM/TURBO never exceed the cap.
+    assert world.velocity_mps(fpx.VelocityLevel.SLOW) == pytest.approx(0.3)
+    assert world.velocity_mps(fpx.VelocityLevel.MEDIUM) == pytest.approx(0.5)
+    assert world.velocity_mps(fpx.VelocityLevel.ZOOM) == pytest.approx(0.5)   # 0.8 → 0.5
+    assert world.velocity_mps(fpx.VelocityLevel.TURBO) == pytest.approx(0.5)  # 1.0 → 0.5
+    # enum ints are unchanged (firmware P-gain divisors)
+    assert int(fpx.VelocityLevel.ZOOM) == 100 and int(fpx.VelocityLevel.TURBO) == 50
+
+
+def test_move_never_exceeds_speed_cap(drone, world):
+    drone.takeoff(110)
+    for level in (fpx.VelocityLevel.ZOOM, fpx.VelocityLevel.TURBO,
+                  fpx.VelocityLevel.MEDIUM):
+        t0 = world.clock
+        n0, e0 = drone.n, drone.e
+        drone.move(fpx.Direction.FORWARD, 200, speed=level)   # 2 m
+        dist = math.hypot(drone.n - n0, drone.e - e0)
+        dt = world.clock - t0
+        assert dt > 0 and dist / dt <= 0.5 + 1e-9             # effective speed ≤ 0.5 m/s
+
+
 def test_altitude_integrates_from_up_stick(drone):
     drone.takeoff(100)
     a0 = drone.get_altitude()
