@@ -198,7 +198,8 @@ def test_worker_phase2_states():
     fpx.set_active_world(w)
     d = fpx.FakeDroneAPI(w)
     d.connect(w.ip_map[0])
-    s = d.create_video_stream(); d.set_video_stream(True); s.start()
+    s = d.create_video_stream()          # NOT enabled here — run_phase2 must turn it on (R1)
+    assert d.video_enabled is False
     u = fuwb.FakeUWBParserThread(world=w)
     st, tb = MissionState(), TaskBoard()
     worker = DroneWorker(d, u, 0, cfg, sleep=NOSLEEP)
@@ -208,4 +209,5 @@ def test_worker_phase2_states():
     assert WorkerState.RELAUNCH in worker.history
     assert WorkerState.SEARCH in worker.history
     assert worker.history[-1] == WorkerState.DONE
+    assert d.video_enabled is True        # R1: camera turned ON at Phase-2 start
     fpx.set_active_world(None)

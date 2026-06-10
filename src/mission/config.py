@@ -86,7 +86,6 @@ class PadCfg(_Base):
 
 class LandingCfg(_Base):
     hoop_tol_m: float
-    confirm_pad_aruco: bool
 
 
 class FailsafeCfg(_Base):

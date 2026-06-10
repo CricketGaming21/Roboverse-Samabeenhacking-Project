@@ -142,8 +142,7 @@ class DroneWorker:
                 invert_forward=cfg.frame.invert_forward,
                 invert_right=cfg.frame.invert_right,
                 hold_on_dropout=cfg.uwb.hold_on_dropout, sleep=self.sleep,
-                confirm_pad=cfg.landing.confirm_pad_aruco, stream=self.stream,
-                on_step=self._on_step)
+                on_step=self._on_step)               # R1: UWB-only, no ArUco, camera off
             self.landed_ok = landed
             self._set(WorkerState.LANDED if landed else WorkerState.FAILED)
             return landed
@@ -180,6 +179,9 @@ class DroneWorker:
             if self.drone.get_altitude() < 30.0:           # was landed after phase 1
                 sdk_compat.prepare_manual_control(self.drone, velocity_level=None)
                 self.drone.takeoff(int(m_to_cm(cfg.speed.cruise_alt_m)))
+            if stream is not None:                         # camera ON at Phase-2 start
+                self.drone.set_video_stream(True)          # (off during Phase-1 UWB landing)
+                stream.start()
 
             self._set(WorkerState.SEARCH)
             banked = phase2_search(

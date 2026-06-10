@@ -1,9 +1,10 @@
 """Phase 1 — deploy + land in the hoop.
 
 `assign_pads` picks 3 of the announced valid pads for the 3 drones, minimising total
-route length and avoiding crossing paths. `land_in_hoop` centres on UWB truth,
-optionally decode-confirms the pad ArUco (defensive), and descends ONLY when
-centred-in-hoop, the descent column is footprint-clear, and nothing unexpected is below.
+route length and avoiding crossing paths. `land_in_hoop` lands **purely on UWB** — the real
+landing pads have NO ArUco markers (R1), so there is no decode/confirm: centre on the UWB
+target within `hoop_tol_m`, then descend ONLY when centred-in-hoop, the descent column is
+footprint-clear, and the down barrier is clear above 0.35 m. The camera stays off in Phase 1.
 
 Count-first: never trade a landing for speed (docs/RULES_AND_CONSTRAINTS.md).
 """
@@ -13,10 +14,7 @@ from __future__ import annotations
 import itertools
 import math
 import time
-from typing import Dict, List, Optional, Sequence, Tuple
-
-import cv2
-import numpy as np
+from typing import Dict, Optional, Sequence, Tuple
 
 from mission.control.uwb_loop import fly_to_uwb
 from mission.frames import arena_to_body, clamp_speed
@@ -69,15 +67,6 @@ def assign_pads(valid_pads: Sequence, drone_starts: Dict[int, Point]) -> Dict[in
 # --------------------------------------------------------------------------- #
 # landing
 # --------------------------------------------------------------------------- #
-def _decode_ids(frame_rgb: np.ndarray, dictionary: str = "DICT_6X6_250") -> List[int]:
-    gray = cv2.cvtColor(frame_rgb, cv2.COLOR_RGB2GRAY)
-    det = cv2.aruco.ArucoDetector(
-        cv2.aruco.getPredefinedDictionary(getattr(cv2.aruco, dictionary)),
-        cv2.aruco.DetectorParameters())
-    _, ids, _ = det.detectMarkers(gray)
-    return [] if ids is None else [int(i) for i in ids.flatten()]
-
-
 def _point_in_footprint(p: Point, footprints: Sequence[Tuple[float, float, float, float]],
                         margin: float = 0.0) -> bool:
     for cn, ce, sn, se in footprints:
@@ -94,12 +83,10 @@ def land_in_hoop(drone, uwb, tag_id: int, pad_xy: Point, hoop_tol_m: float, *,
                  climb_mps: float = 0.5, yaw_offset_deg: float = 0.0,
                  invert_forward: bool = False, invert_right: bool = False,
                  hold_on_dropout: bool = True, sleep=time.sleep,
-                 confirm_pad: bool = False, stream=None, pad_id: Optional[int] = None,
-                 dictionary: str = "DICT_6X6_250", on_step=None) -> bool:
-    """Centre on the pad (UWB) then descend into the hoop. Returns True iff the final
-    UWB position is within `hoop_tol_m` of the pad centre."""
-    from pyhulax.core import CameraPitchMode
-
+                 on_step=None) -> bool:
+    """Centre on the pad (UWB target) then descend into the hoop — **UWB-only, no ArUco**
+    (R1: the real pads carry no markers). Returns True iff the final UWB position is within
+    `hoop_tol_m` of the pad centre."""
     # 1) centre over the pad within the hoop tolerance
     centred = fly_to_uwb(drone, uwb, tag_id, pad_xy, alt_m=cruise_alt_m,
                          tol_m=hoop_tol_m, speed_tol_mps=max(0.1, hoop_tol_m),
@@ -117,14 +104,7 @@ def land_in_hoop(drone, uwb, tag_id: int, pad_xy: Point, hoop_tol_m: float, *,
     if drone.get_obstacles().down:           # something below at cruise → abort
         return False
 
-    # 3) decode-to-confirm the pad ArUco (optional, defensive — UWB stays the truth)
-    if confirm_pad and stream is not None:
-        drone.set_camera_angle(CameraPitchMode.DOWN_ABSOLUTE, 90)
-        frame = stream.latest_frame
-        if frame is not None:
-            _decode_ids(frame.to_rgb(), dictionary)   # logged/defensive; never aborts
-
-    # 4) controlled descent that keeps re-centring; descend only while centred
+    # 3) controlled descent that keeps re-centring; descend only while centred
     dt = 1.0 / rate_hz if rate_hz > 0 else 0.05
     for _ in range(max_steps):
         x, y, _t = uwb.get_tag_position(tag_id)

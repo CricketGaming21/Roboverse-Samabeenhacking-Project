@@ -60,7 +60,7 @@ pads:                        # [SYNC-WITH-SIM] coords come from Discord on the d
 
 landing:
   hoop_tol_m: 0.15           # [TO CONFIRM] measured hoop radius minus UWB margin
-  confirm_pad_aruco: true    # decode-to-confirm pad id before committing descent (defensive)
+  # R1: Phase-1 lands on UWB ONLY — the real pads carry no ArUco, so there is no decode/confirm.
 
 failsafe:
   battery_rtl_pct: 20        # return-and-land threshold (count-first: keep what we have)

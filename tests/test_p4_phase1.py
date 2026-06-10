@@ -61,7 +61,16 @@ def test_assign_raises_when_too_few_pads():
 # --------------------------------------------------------------------------- #
 # land_in_hoop
 # --------------------------------------------------------------------------- #
-def test_land_in_hoop_centres_and_lands():
+def test_land_in_hoop_centres_and_lands_uwb_only(monkeypatch):
+    # R1: Phase-1 lands on UWB ONLY — if any ArUco decode were attempted it would raise,
+    # proving the landing path never touches cv2.aruco and the camera is never needed.
+    import cv2
+
+    def _boom(*a, **k):
+        raise AssertionError("Phase-1 landing must not call cv2.aruco (UWB-only)")
+    monkeypatch.setattr(cv2.aruco, "ArucoDetector", _boom)
+    monkeypatch.setattr(cv2.aruco, "detectMarkers", _boom, raising=False)
+
     w = fpx.FakeWorld(crates=[])
     w.pads = [Marker(10, 8.5, 3.0)]
     fpx.set_active_world(w)
@@ -70,15 +79,12 @@ def test_land_in_hoop_centres_and_lands():
     d.n, d.e = 8.0, 2.6                                      # offset from the pad
     d.takeoff(110)
     u = fuwb.FakeUWBParserThread(world=w)
-    s = d.create_video_stream()
-    d.set_video_stream(True)
-    s.start()
-    ok = land_in_hoop(d, u, 0, (8.5, 3.0), hoop_tol_m=0.15, footprints=[],
-                      confirm_pad=True, stream=s, pad_id=10, sleep=NOSLEEP)
+    ok = land_in_hoop(d, u, 0, (8.5, 3.0), hoop_tol_m=0.15, footprints=[], sleep=NOSLEEP)
     assert ok is True
     x, y, _ = u.get_tag_position(0)
     assert math.hypot(x - 8.5, y - 3.0) <= 0.15
     assert d.get_altitude() == 0.0                          # actually landed
+    assert d.video_enabled is False                         # camera stayed off in Phase 1
     fpx.set_active_world(None)
 
 
@@ -155,4 +161,5 @@ def test_worker_walks_phase1_states():
     assert worker.history[:4] == [WorkerState.INIT, WorkerState.TAKEOFF,
                                   WorkerState.GO_TO_PAD, WorkerState.LAND_HOOP]
     assert worker.history[-1] == WorkerState.LANDED
+    assert d.video_enabled is False        # R1: camera stays OFF through Phase 1
     fpx.set_active_world(None)
