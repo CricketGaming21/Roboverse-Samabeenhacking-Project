@@ -23,6 +23,41 @@
 - **Each rover carries a unique ArUco marker on top** (confirmed for the real event). So "snapshot the rover" = **read its ArUco marker** — detection is ArUco-first, not object-detection-first.
 - Scored on **number of distinct rovers successfully captured + time**.
 
+## Finals brief — confirmed facts + what the sim now models (Phases 31–34)
+> From the official Finals brief; the `hula_sim` now models all of this, so mission
+> code is developed + tested against it. Items marked **PROVISIONAL** come from
+> Discord/organisers (not yet in the brief) — **parameterise, never hard-bake.**
+
+- **0.5 m/s HARD speed cap.** Every `VelocityLevel` maps to **≤ 0.5 m/s** (MEDIUM is
+  the usable max; ZOOM/TURBO clamp down to it). The enum names/values and the public
+  API are unchanged — only the mapped speed clamps. Recommended flight height
+  **1.1 m**. Plan for slow, deliberate flight.
+- **No flying OVER obstacles + an altitude cap → score INVALIDATED.** Crates are
+  ~1.2 m. **Route AROUND crate footprints** and stay under the altitude cap (~2.0 m
+  PROVISIONAL). The sim FLAGS a violation — visible in `--record` / `--dashboard`,
+  in the `DebugProbe` snapshot (`compliance`), and `logs/compliance` — a *flagged*
+  event, **not a crash**, so you can see it and fix the nav (no silent run loss).
+- **Arena coords are GIVEN as a data file.** The sim emits **`arena_truth.yaml`**
+  (arena dims + every crate `center/size/height` + archway) — plain data the mission
+  loads with `yaml.safe_load`, **never importing `simcore`** (it mirrors the
+  organisers' Discord coordinate file). PROVISIONAL until Discord; regenerate from
+  the sim with `python -m scripts.emit_arena_truth`.
+- **Drones are obstacles to each other.** `get_obstacles()` (the same five booleans)
+  trips on a nearby drone at the same IR range as crates. Keep 3-drone separation at
+  a common ~1.1 m height (no altitude layering needed — just watch the barrier flags).
+- **Phase-2 rovers: 5 total = 3 AUTONOMOUS + 2 HUMAN-TELEOPERATED opponents.** The
+  opponents carry a **separate ArUco id block** (sim: `[30,31]` vs autonomous
+  `[20,21,22]`) and are adversarial — they **flee** the nearest drone, seek **crate
+  cover**, and **juke**. Detection/lock-on must handle evasive targets; **all 5
+  distinct ids count** for Stage 2.
+- **Stage-1 scoring = land INSIDE THE HOOP** of a chosen valid pad (`hoop_radius_m`,
+  PROVISIONAL) + time. **Stage-2 = distinct ArUco ids across all 5 rovers** + time.
+- **~8 min per stage**; **no re-assessment on crash.** Budget search/coverage to fit.
+- **Drone count is OPEN — design for 1 OR 3.** Brief logistics say **1** HULA for
+  Pre-U; Challenge 2 says launch **3**. Keep drone count a **config knob** — never
+  hardcode 3 (the sim runs the scenario with both).
+- **ArUco dictionary:** assume **`DICT_6X6_250`** (confirm at the briefing).
+
 ## THE PLATFORM REALITY (read carefully — this is what changed)
 The HULA (HG-Fly F09-lite) is a small indoor edu-drone driven by the **pyhulax** SDK. It is **not** a PX4/MAVSDK platform and **not** a depth-camera platform.
 
@@ -73,6 +108,7 @@ These files exist in `reference/` for history; they are **not applicable to Chal
 - A separate **`hula_sim`** project provides a drop-in `pyhulax` package, a drop-in `UWBParserThread`, and a PyBullet world (room, ArUco pads at given coords, 5 moving ArUco-tagged rovers, barrier sensors, scoring, top-down view).
 - **Mission code imports `pyhulax` / `UWBParserThread` unchanged** and runs against the sim for development, then against the real SDK on the day. The swap is just which `pyhulax` is on the path.
 - **Mission code must never depend on anything sim-specific** — only the public pyhulax/UWB API.
+- The sim now models the full Finals brief (Phases 31–34 above): the **0.5 m/s cap**, the **mixed convoy** (3 autonomous + 2 evasive/teleoperated rovers), **compliance flagging** (no-fly-over-crate + altitude cap), **inter-drone barrier sensing**, **hoop / distinct-id scoring**, and the **8-min stage clock**. Arena ground truth is the **`arena_truth.yaml`** data file (loaded as plain data, not via `simcore`). The sim ships a YOLO seam (`mission_examples/rover_detection_example.py`) showing where a mission-side YOLO plugs in behind the ArUco-first detector.
 
 ## Coordinate-frame & gotcha checklist
 - `move` = body / current heading. `move_to` + `get_position` = fixed takeoff frame (cm). UWB = arena frame (m), **no Z**.
