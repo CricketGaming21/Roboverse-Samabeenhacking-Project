@@ -9,3 +9,4 @@ logs/*.log
 logs/scans/
 .DS_Store
 BLOCKED.md.bak
+*:Zone.Identifier
