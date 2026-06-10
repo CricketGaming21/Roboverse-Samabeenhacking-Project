@@ -53,7 +53,9 @@ camera:
   search_gimbal_deg: 60
   read_gimbal_deg: 90
 
-# The 5 real landing pads (metres, UWB cage frame). designated_pads = the 3 to land on
+# [FROM DISCORD ON THE DAY] — PLACEHOLDER real landing pads (metres, UWB cage frame).
+# These are NOT the sim coords (do not copy mission_config.yaml's sim pads here): overwrite
+# x/y with the organisers' Discord numbers on the day. designated_pads = the 3 to land on
 # (the operator sets the real valid 3 on the day).
 pads:
   11:  { x: 1.35, y: 4.40 }
