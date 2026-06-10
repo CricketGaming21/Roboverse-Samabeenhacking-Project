@@ -1,7 +1,8 @@
 # Canonical schema-valid plan fixture (see docs/MISSION_PLAN_SCHEMA.md). The Planner GUI (P9)
 # produces files in this shape; P4 (pad/route) + P7 (vantages) + P9's schema test all depend on it
-# staying valid. Routes are footprint-clear of the inflated crates; vantages lie inside disjoint
-# bubbles; pad_ids are valid (config: 10,11,12,14 valid; 13 invalid). Frames: arena (north, east) m.
+# staying valid. This fixture carries its OWN illustrative arena (one crate at 5.0,3.0) — routes are
+# footprint-clear of it and vantages lie inside disjoint bubbles; it is independent of arena_truth.yaml.
+# pad_ids are the sim's valid+designated zones (11,45,51). Frames: arena (north, east) m.
 version: 1
 arena:
   length_m: 10.0
@@ -12,7 +13,7 @@ arena:
 drones:
   - tag_id: 0
     color: "#e6194b"
-    phase1: { pad_id: 10, route_m: [[0.6, 1.0], [8.5, 1.0], [8.5, 3.0]] }   # -> pad 10 (8.5,3.0)
+    phase1: { pad_id: 11, route_m: [[0.6, 1.0], [8.5, 1.0], [8.5, 3.0]] }   # -> designated pad 11
     phase2:
       bubble: [[0.0, 0.0], [10.0, 0.0], [10.0, 1.9], [0.0, 1.9]]
       vantages:
@@ -20,7 +21,7 @@ drones:
         - { xy: [6.0, 1.0], look_yaw_deg: 0,  gimbal_deg: 90, dwell_s: 2.0 }
   - tag_id: 1
     color: "#3cb44b"
-    phase1: { pad_id: 11, route_m: [[0.6, 3.0], [1.0, 4.8], [5.5, 4.8]] }    # -> pad 11 (5.5,4.8)
+    phase1: { pad_id: 45, route_m: [[0.6, 3.0], [1.0, 4.8], [5.5, 4.8]] }    # -> designated pad 45
     phase2:
       bubble: [[0.0, 2.1], [10.0, 2.1], [10.0, 3.9], [0.0, 3.9]]
       vantages:
@@ -28,7 +29,7 @@ drones:
         - { xy: [7.0, 3.0], look_yaw_deg: 90, gimbal_deg: 75, dwell_s: 2.0 }
   - tag_id: 2
     color: "#4363d8"
-    phase1: { pad_id: 12, route_m: [[1.0, 5.5], [2.0, 4.5]] }                # -> pad 12 (2.0,4.5)
+    phase1: { pad_id: 51, route_m: [[1.0, 5.5], [2.0, 4.5]] }                # -> designated pad 51
     phase2:
       bubble: [[0.0, 4.1], [10.0, 4.1], [10.0, 6.0], [0.0, 6.0]]
       vantages:

@@ -64,7 +64,8 @@ def test_load_default_config():
     assert len(cfg.pads) == 5
     assert cfg.aruco.dictionary == "DICT_7X7_1000"               # sim now mirrors real
     assert cfg.aruco.rover_ids == [11, 45, 51, 67, 101]          # allow-list (sim == real)
-    assert len(cfg.valid_pads()) == 4
+    assert len(cfg.valid_pads()) == 3                            # sim valid zones: 11,45,51 (67,101 invalid)
+    assert {p.id for p in cfg.designated_pads()} == {11, 45, 51}
     assert cfg.uwb.tag_ids == [0, 1, 2]
 
 
