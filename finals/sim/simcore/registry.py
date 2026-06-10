@@ -57,6 +57,7 @@ class SimRegistry:
         self.referee = None          # part-2 referee (after boot, if enabled)
         self.landing_scorer = scoring.LandingScorer(self)  # part-1 referee
         self.compliance = None       # compliance flag logger (set during boot)
+        self._auto_recorder = None   # $HULA_SIM_RECORD integration hook
         self.scenario = None         # episode state machine (set during boot)
         self.renderer = p.ER_TINY_RENDERER  # upgraded if the EGL plugin loads
         self._egl_plugin = -1
@@ -79,6 +80,26 @@ class SimRegistry:
             self.referee.start()
         elif self.config.scoring.enabled:
             self._log.info("cameras disabled (live-3D): referee/scanning OFF")
+        self._maybe_start_autorecord()
+
+    def _maybe_start_autorecord(self) -> None:
+        """Opt-in integration hook: if $HULA_SIM_RECORD names a path, auto-start
+        the offscreen cockpit recorder when the world boots — so a MISSION
+        process (which boots the sim in-process via connect() and cannot import
+        the sim's recorder) still gets an MP4 of its run. Observer-only; OFF
+        unless the env var is set; never under p.GUI / cameras-disabled."""
+        import os
+        path = os.environ.get("HULA_SIM_RECORD")
+        if not path or not self.cameras_enabled or self.gui:
+            return
+        import atexit
+
+        from .recorder import ArenaRecorder
+        self._auto_recorder = ArenaRecorder(self, path)
+        self._auto_recorder.start()
+        atexit.register(self._auto_recorder.stop)  # finalise mp4 on plain exit
+        self._log.info("HULA_SIM_RECORD set -> auto-recording this run to %s",
+                       path)
 
     # ------------------------------------------------------------------ #
     # Cross-thread access
@@ -255,6 +276,8 @@ class SimRegistry:
 
     def shutdown(self) -> None:
         """Stop the referee + sim thread and disconnect PyBullet. Idempotent."""
+        if self._auto_recorder is not None:
+            self._auto_recorder.stop()
         if self.referee is not None:
             self.referee.stop()
         if self.compliance is not None:
