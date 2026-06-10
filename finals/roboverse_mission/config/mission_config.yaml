@@ -24,6 +24,12 @@ uwb:
   hold_on_dropout: true      # on (None,None,None): hold position, never lurch
   tag_ids: [0, 1, 2]         # [SYNC-WITH-SIM] one UWB tag per drone
 
+drones:                      # [SYNC-WITH-SIM] mirrors sim drones.units: control IP <-> UWB tag <-> arena start (north,east) m.
+  # Discovery resolves IP<->tag from THIS (the sim's Dola raises NotImplementedError); Dola is opt-in for the real day.
+  - { ip: "10.0.0.11", tag_id: 0, start: [0.6, 1.1] }
+  - { ip: "10.0.0.12", tag_id: 1, start: [0.6, 0.6] }
+  - { ip: "10.0.0.13", tag_id: 2, start: [1.1, 0.6] }
+
 planner:
   arena_truth_file: config/arena_truth.yaml   # crates+arena emitted by the sim (emit_arena_truth); Discord coords play this role on the day
   inflate_m: 0.40            # crate footprint inflation = drone half-width + UWB + overshoot + barrier margin
@@ -45,16 +51,16 @@ camera:
   read_gimbal_deg: 90
 
 pads:                        # [SYNC-WITH-SIM] coords come from Discord on the day; validity announced
-  # id, arena (north,east) m, valid flag. designated set is chosen at runtime (pick 3 valid).
-  - { id: 10, north: 8.5, east: 3.0, valid: true  }
-  - { id: 11, north: 5.5, east: 4.8, valid: true  }
-  - { id: 12, north: 2.0, east: 4.5, valid: true  }
-  - { id: 13, north: 5.5, east: 1.2, valid: false }
-  - { id: 14, north: 2.0, east: 1.5, valid: true  }
+  # id, arena (north,east) m, valid + designated. Part-1 scores only valid AND designated pads.
+  - { id: 10, north: 8.5, east: 3.0, valid: true,  designated: true  }   # top "Land"
+  - { id: 11, north: 5.5, east: 4.8, valid: true,  designated: true  }   # right "Land"
+  - { id: 12, north: 2.0, east: 4.5, valid: true,  designated: true  }   # bottom-right "Land"
+  - { id: 13, north: 5.5, east: 1.2, valid: false, designated: false }   # left-mid INVALID
+  - { id: 14, north: 2.0, east: 1.5, valid: true,  designated: false }   # valid, not designated
 
 landing:
   hoop_tol_m: 0.15           # [TO CONFIRM] measured hoop radius minus UWB margin
-  confirm_pad_aruco: true    # decode-to-confirm pad id before committing descent (defensive)
+  # R1: Phase-1 lands on UWB ONLY — the real pads carry no ArUco, so there is no decode/confirm.
 
 failsafe:
   battery_rtl_pct: 20        # return-and-land threshold (count-first: keep what we have)

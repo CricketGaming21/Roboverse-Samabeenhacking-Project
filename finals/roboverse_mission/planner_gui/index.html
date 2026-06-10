@@ -1,0 +1,218 @@
+<!DOCTYPE html>
+<!-- RoboVerse C2 Mission Planner (P9). Single file, no build step. Author Phase-1 routes +
+     Phase-2 vantages on the arena map with LIVE validation (red = footprint/bounds breach or
+     inter-path conflict), then export mission_plan.yaml (docs/MISSION_PLAN_SCHEMA.md) + a PNG.
+     Interactivity is human-verified; the committed examples/mission_plan.example.yaml locks the
+     export contract that the headless schema test checks. -->
+<html lang="en">
+<head>
+<meta charset="utf-8"/>
+<title>RoboVerse Mission Planner</title>
+<style>
+  body { font: 14px/1.4 system-ui, sans-serif; margin: 0; background: #11151c; color: #e6e6e6; }
+  header { padding: 8px 12px; background: #0c0f14; border-bottom: 1px solid #222; }
+  #wrap { display: flex; }
+  #side { width: 320px; padding: 10px; }
+  #side h3 { margin: 12px 0 4px; font-size: 13px; color: #9fb3c8; }
+  button, select { background: #1c2530; color: #e6e6e6; border: 1px solid #33445a;
+    border-radius: 5px; padding: 5px 9px; margin: 2px 2px; cursor: pointer; }
+  button.active { background: #2d6cdf; border-color: #2d6cdf; }
+  canvas { background: #0a0d12; display: block; border-left: 1px solid #222; cursor: crosshair; }
+  textarea { width: 100%; height: 90px; background: #0a0d12; color: #cde; border: 1px solid #33445a; }
+  .err { color: #ff6b6b; white-space: pre-wrap; font-size: 12px; }
+  .ok { color: #5fd35f; }
+  .legend span { display: inline-block; margin-right: 8px; }
+</style>
+</head>
+<body>
+<header><b>RoboVerse — Challenge 2 Mission Planner</b> &nbsp; <span class="legend">
+  <span>● route</span><span>◆ vantage</span><span style="color:#ff6b6b">red = invalid</span></span>
+</header>
+<div id="wrap">
+  <div id="side">
+    <h3>Active drone</h3>
+    <div id="droneBtns"></div>
+    <h3>Tool</h3>
+    <button data-tool="route" class="active">Phase-1 waypoint</button>
+    <button data-tool="vantage">Phase-2 vantage</button>
+    <button data-tool="move">Move / drag</button>
+    <button data-tool="del">Delete</button>
+    <h3>Pad for active drone</h3>
+    <select id="padSel"></select>
+    <h3>Arena truth (paste, optional)</h3>
+    <textarea id="arenaIn" placeholder="arena: {length_m: 10, width_m: 6}&#10;crates: [...]"></textarea>
+    <button id="applyArena">Apply arena</button>
+    <h3>Export</h3>
+    <button id="exportYaml">Export mission_plan.yaml</button>
+    <button id="exportPng">Export PNG</button>
+    <h3>Validation</h3>
+    <div id="valid" class="ok">ok</div>
+  </div>
+  <canvas id="cv" width="900" height="540"></canvas>
+</div>
+<script>
+// ---- model (mirrors config defaults; arena truth overridable) -------------- //
+const COLORS = ["#e6194b", "#3cb44b", "#4363d8"];
+let arena = { length_m: 10, width_m: 6, inflate_m: 0.40,
+  crates: [{ center: [5.0, 3.0], size: [0.9, 0.9], height_m: 1.2 }] };
+const VALID_PADS = [
+  { id: 10, north: 8.5, east: 3.0 }, { id: 11, north: 5.5, east: 4.8 },
+  { id: 12, north: 2.0, east: 4.5 }, { id: 14, north: 2.0, east: 1.5 }];
+let drones = [0, 1, 2].map(i => ({
+  tag_id: i, color: COLORS[i], pad_id: [10, 11, 12][i],
+  route: [], bubble: [[0, i * 2], [10, i * 2], [10, i * 2 + 2], [0, i * 2 + 2]],
+  vantages: [] }));
+let active = 0, tool = "route", drag = null;
+
+const cv = document.getElementById("cv"), ctx = cv.getContext("2d");
+const PAD = 30;
+function sx(e) { return PAD + e / arena.width_m * (cv.width - 2 * PAD); }     // east -> x
+function sy(n) { return cv.height - PAD - n / arena.length_m * (cv.height - 2 * PAD); } // north -> y
+function inv(x, y) { return [ (cv.height - PAD - y) / (cv.height - 2 * PAD) * arena.length_m,
+                              (x - PAD) / (cv.width - 2 * PAD) * arena.width_m ]; }
+
+// ---- geometry (same rules as src/mission/mission/plan.py) ------------------ //
+function inflated() {
+  return arena.crates.map(c => ({ n0: c.center[0] - c.size[0] / 2 - arena.inflate_m,
+    e0: c.center[1] - c.size[1] / 2 - arena.inflate_m,
+    n1: c.center[0] + c.size[0] / 2 + arena.inflate_m,
+    e1: c.center[1] + c.size[1] / 2 + arena.inflate_m })); }
+function segHitsRect(p, q, r, eps = 0.005) {
+  const xmin = r.n0 + eps, xmax = r.n1 - eps, ymin = r.e0 + eps, ymax = r.e1 - eps;
+  if (xmax <= xmin || ymax <= ymin) return false;
+  let dn = q[0] - p[0], de = q[1] - p[1], t0 = 0, t1 = 1;
+  const tests = [[-dn, p[0] - xmin], [dn, xmax - p[0]], [-de, p[1] - ymin], [de, ymax - p[1]]];
+  for (const [pk, qk] of tests) {
+    if (Math.abs(pk) < 1e-12) { if (qk < 0) return false; }
+    else { const rr = qk / pk;
+      if (pk < 0) { if (rr > t1) return false; if (rr > t0) t0 = rr; }
+      else { if (rr < t0) return false; if (rr < t1) t1 = rr; } } }
+  return t0 < t1 - 1e-9; }
+function segClear(p, q) { return !inflated().some(r => segHitsRect(p, q, r)); }
+function inBounds(p) { return p[0] >= 0 && p[0] <= arena.length_m && p[1] >= 0 && p[1] <= arena.width_m; }
+function pointInPoly(p, poly) { let inside = false;
+  for (let i = 0, j = poly.length - 1; i < poly.length; j = i++) {
+    const [xi, yi] = poly[i], [xj, yj] = poly[j];
+    if ((yi > p[1]) !== (yj > p[1]) && p[0] < (xj - xi) * (p[1] - yi) / (yj - yi + 1e-15) + xi)
+      inside = !inside; } return inside; }
+function segSegHit(a1, a2, b1, b2) {
+  const o = (a, b, c) => (b[0]-a[0])*(c[1]-a[1])-(b[1]-a[1])*(c[0]-a[0]);
+  return (o(b1,b2,a1) > 0) !== (o(b1,b2,a2) > 0) && (o(a1,a2,b1) > 0) !== (o(a1,a2,b2) > 0); }
+
+// ---- validation ------------------------------------------------------------ //
+function validate() {
+  const errs = [];
+  for (const d of drones) {
+    for (const p of d.route) if (!inBounds(p)) errs.push(`drone ${d.tag_id}: route point out of bounds`);
+    for (let i = 0; i < d.route.length - 1; i++)
+      if (!segClear(d.route[i], d.route[i+1])) errs.push(`drone ${d.tag_id}: route crosses a footprint`);
+    for (const v of d.vantages) {
+      if (!pointInPoly(v.xy, d.bubble)) errs.push(`drone ${d.tag_id}: vantage outside its bubble`);
+      if (inflated().some(r => v.xy[0] > r.n0 && v.xy[0] < r.n1 && v.xy[1] > r.e0 && v.xy[1] < r.e1))
+        errs.push(`drone ${d.tag_id}: vantage on a footprint`); } }
+  for (let i = 0; i < drones.length; i++) for (let j = i+1; j < drones.length; j++) {
+    const A = drones[i].route, B = drones[j].route;
+    for (let a = 0; a < A.length-1; a++) for (let b = 0; b < B.length-1; b++)
+      if (segSegHit(A[a], A[a+1], B[b], B[b+1])) { errs.push(`routes ${i} & ${j} cross`); a = A.length; break; } }
+  const vd = document.getElementById("valid");
+  vd.className = errs.length ? "err" : "ok";
+  vd.textContent = errs.length ? errs.join("\n") : "ok — plan is valid";
+  return errs; }
+
+// ---- draw ------------------------------------------------------------------ //
+function draw() {
+  ctx.clearRect(0, 0, cv.width, cv.height);
+  ctx.strokeStyle = "#1d2733"; ctx.lineWidth = 1;            // grid
+  for (let e = 0; e <= arena.width_m; e++) { ctx.beginPath(); ctx.moveTo(sx(e), sy(0)); ctx.lineTo(sx(e), sy(arena.length_m)); ctx.stroke(); }
+  for (let n = 0; n <= arena.length_m; n++) { ctx.beginPath(); ctx.moveTo(sx(0), sy(n)); ctx.lineTo(sx(arena.width_m), sy(n)); ctx.stroke(); }
+  ctx.strokeStyle = "#3a4658"; ctx.strokeRect(sx(0), sy(arena.length_m), sx(arena.width_m)-sx(0), sy(0)-sy(arena.length_m));
+  for (const c of arena.crates) {                            // crates + inflation
+    ctx.fillStyle = "#5a3a3a"; ctx.fillRect(sx(c.center[1]-c.size[1]/2), sy(c.center[0]+c.size[0]/2),
+      sx(c.center[1]+c.size[1]/2)-sx(c.center[1]-c.size[1]/2), sy(c.center[0]-c.size[0]/2)-sy(c.center[0]+c.size[0]/2)); }
+  ctx.strokeStyle = "#7a4a4a"; ctx.setLineDash([4,3]);
+  for (const r of inflated()) ctx.strokeRect(sx(r.e0), sy(r.n1), sx(r.e1)-sx(r.e0), sy(r.n0)-sy(r.n1));
+  ctx.setLineDash([]);
+  for (const p of VALID_PADS) { ctx.fillStyle = "#caa800"; ctx.beginPath();
+    ctx.arc(sx(p.east), sy(p.north), 7, 0, 7); ctx.fill();
+    ctx.fillStyle = "#caa800"; ctx.fillText(p.id, sx(p.east)+8, sy(p.north)); }
+  for (const d of drones) {
+    ctx.strokeStyle = d.color; ctx.globalAlpha = 0.25; ctx.beginPath();   // bubble
+    d.bubble.forEach((p, i) => i ? ctx.lineTo(sx(p[1]), sy(p[0])) : ctx.moveTo(sx(p[1]), sy(p[0])));
+    ctx.closePath(); ctx.stroke(); ctx.globalAlpha = 1;
+    ctx.strokeStyle = d.color; ctx.lineWidth = d === drones[active] ? 3 : 1.5;   // route
+    for (let i = 0; i < d.route.length - 1; i++) { const bad = !segClear(d.route[i], d.route[i+1]);
+      ctx.strokeStyle = bad ? "#ff6b6b" : d.color; ctx.beginPath();
+      ctx.moveTo(sx(d.route[i][1]), sy(d.route[i][0])); ctx.lineTo(sx(d.route[i+1][1]), sy(d.route[i+1][0])); ctx.stroke(); }
+    ctx.fillStyle = d.color;
+    for (const p of d.route) { ctx.beginPath(); ctx.arc(sx(p[1]), sy(p[0]), 4, 0, 7); ctx.fill(); }
+    for (const v of d.vantages) { const bad = !pointInPoly(v.xy, d.bubble);   // vantage diamonds
+      ctx.fillStyle = bad ? "#ff6b6b" : d.color; ctx.save();
+      ctx.translate(sx(v.xy[1]), sy(v.xy[0])); ctx.rotate(Math.PI/4); ctx.fillRect(-5,-5,10,10); ctx.restore(); } }
+  ctx.lineWidth = 1;
+  validate(); }
+
+// ---- export ---------------------------------------------------------------- //
+function toYaml() {
+  const f = n => (+n).toFixed(2).replace(/\.00$/, ".0");
+  let s = "version: 1\narena:\n";
+  s += `  length_m: ${f(arena.length_m)}\n  width_m: ${f(arena.width_m)}\n  crates:\n`;
+  for (const c of arena.crates) s += `    - { center: [${f(c.center[0])}, ${f(c.center[1])}], size: [${f(c.size[0])}, ${f(c.size[1])}], height_m: ${f(c.height_m)} }\n`;
+  s += `  inflate_m: ${f(arena.inflate_m)}\ndrones:\n`;
+  for (const d of drones) {
+    s += `  - tag_id: ${d.tag_id}\n    color: "${d.color}"\n`;
+    s += `    phase1: { pad_id: ${d.pad_id}, route_m: [${d.route.map(p => `[${f(p[0])}, ${f(p[1])}]`).join(", ")}] }\n`;
+    s += `    phase2:\n      bubble: [${d.bubble.map(p => `[${f(p[0])}, ${f(p[1])}]`).join(", ")}]\n      vantages:\n`;
+    for (const v of d.vantages) s += `        - { xy: [${f(v.xy[0])}, ${f(v.xy[1])}], look_yaw_deg: ${f(v.look_yaw_deg)}, gimbal_deg: ${f(v.gimbal_deg)}, dwell_s: ${f(v.dwell_s)} }\n`; }
+  s += `meta:\n  hoop_tol_m: 0.15\n  cruise_alt_m: 1.10\n`;
+  return s; }
+function download(name, text, type) {
+  const a = document.createElement("a");
+  a.href = URL.createObjectURL(new Blob([text], { type })); a.download = name; a.click(); }
+
+// ---- interaction ----------------------------------------------------------- //
+function nearest(list, p, key, tol = 0.4) {
+  let best = -1, bd = tol;
+  list.forEach((it, i) => { const xy = key(it); const d = Math.hypot(xy[0]-p[0], xy[1]-p[1]); if (d < bd) { bd = d; best = i; } });
+  return best; }
+cv.addEventListener("mousedown", ev => {
+  const r = cv.getBoundingClientRect(); const p = inv(ev.clientX - r.left, ev.clientY - r.top);
+  const d = drones[active];
+  if (tool === "route") d.route.push([+p[0].toFixed(2), +p[1].toFixed(2)]);
+  else if (tool === "vantage") d.vantages.push({ xy: [+p[0].toFixed(2), +p[1].toFixed(2)], look_yaw_deg: 0, gimbal_deg: 75, dwell_s: 2.0 });
+  else if (tool === "move") { const i = nearest(d.route, p, x => x); if (i >= 0) drag = { kind: "route", i };
+    else { const j = nearest(d.vantages, p, v => v.xy); if (j >= 0) drag = { kind: "vantage", i: j }; } }
+  else if (tool === "del") { const i = nearest(d.route, p, x => x); if (i >= 0) d.route.splice(i, 1);
+    else { const j = nearest(d.vantages, p, v => v.xy); if (j >= 0) d.vantages.splice(j, 1); } }
+  draw(); });
+cv.addEventListener("mousemove", ev => { if (!drag) return;
+  const r = cv.getBoundingClientRect(); const p = inv(ev.clientX - r.left, ev.clientY - r.top);
+  const d = drones[active]; const xy = [+p[0].toFixed(2), +p[1].toFixed(2)];
+  if (drag.kind === "route") d.route[drag.i] = xy; else d.vantages[drag.i].xy = xy; draw(); });
+window.addEventListener("mouseup", () => drag = null);
+
+document.getElementById("droneBtns").innerHTML = drones.map(d =>
+  `<button data-drone="${d.tag_id}" style="border-color:${d.color}">D${d.tag_id}</button>`).join("");
+document.querySelectorAll("[data-drone]").forEach(b => b.onclick = () => {
+  active = +b.dataset.drone; document.querySelectorAll("[data-drone]").forEach(x => x.classList.remove("active"));
+  b.classList.add("active"); syncPad(); draw(); });
+document.querySelectorAll("[data-tool]").forEach(b => b.onclick = () => {
+  tool = b.dataset.tool; document.querySelectorAll("[data-tool]").forEach(x => x.classList.remove("active"));
+  b.classList.add("active"); });
+const padSel = document.getElementById("padSel");
+padSel.innerHTML = VALID_PADS.map(p => `<option value="${p.id}">pad ${p.id} (${p.north},${p.east})</option>`).join("");
+function syncPad() { padSel.value = drones[active].pad_id; }
+padSel.onchange = () => { drones[active].pad_id = +padSel.value; draw(); };
+document.getElementById("applyArena").onclick = () => {
+  try { const txt = document.getElementById("arenaIn").value.trim(); if (!txt) return;
+    const o = JSON.parse(txt); if (o.arena) { arena.length_m = o.arena.length_m; arena.width_m = o.arena.width_m; }
+    if (o.crates) arena.crates = o.crates; draw(); } catch (e) { alert("arena parse error: " + e); } };
+document.getElementById("exportYaml").onclick = () => {
+  if (validate().length && !confirm("Plan has validation errors — export anyway?")) return;
+  download("mission_plan.yaml", toYaml(), "text/yaml"); };
+document.getElementById("exportPng").onclick = () => download("mission_map.png", "", "image/png") || cv.toBlob(b => {
+  const a = document.createElement("a"); a.href = URL.createObjectURL(b); a.download = "mission_map.png"; a.click(); });
+document.querySelectorAll("[data-drone]")[0].classList.add("active");
+syncPad(); draw();
+</script>
+</body>
+</html>

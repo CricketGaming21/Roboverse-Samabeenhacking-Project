@@ -1,0 +1,177 @@
+"""Typed mission config — pydantic load of `config/mission_config.yaml`.
+
+**Rejects unknown keys** (every section is `extra="forbid"`) so a typo or a stale
+field is caught at load, not in flight. Mirrors the sim's validated-config discipline.
+Enforces the HARD speed cap (`speed.max_mps` must be > 0 and ≤ 0.5).
+"""
+
+from __future__ import annotations
+
+from pathlib import Path
+from typing import List, Optional
+
+import yaml
+from pydantic import BaseModel, ConfigDict, field_validator
+
+DEFAULT_CONFIG_PATH = (Path(__file__).resolve().parents[2]
+                       / "config" / "mission_config.yaml")
+
+
+class _Base(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+
+class MetaCfg(_Base):
+    seed: int
+
+
+class FrameCfg(_Base):
+    yaw_offset_deg: float
+    lock_yaw: bool
+    invert_right: bool
+    invert_forward: bool
+
+
+class SpeedCfg(_Base):
+    max_mps: float
+    cruise_alt_m: float
+    climb_mps: float
+    arrive_tol_m: float
+    ctrl_rate_hz: float
+    kp_xy: float
+    ki_xy: float
+    kp_alt: float
+
+    @field_validator("max_mps")
+    @classmethod
+    def _cap(cls, v: float) -> float:
+        if not (0.0 < v <= 0.5):
+            raise ValueError("speed.max_mps must be in (0, 0.5] — HARD competition cap")
+        return v
+
+
+class UwbCfg(_Base):
+    noise_std_m: float
+    hold_on_dropout: bool
+    tag_ids: List[int]
+    origin_x: float = 0.0       # per-cage UWB origin (real day); the latest UWBParserThread applies it
+    origin_y: float = 0.0
+
+
+class PlannerCfg(_Base):
+    arena_truth_file: str
+    inflate_m: float
+    separation_min_m: float
+
+
+class ArucoCfg(_Base):
+    dictionary: str
+    min_marker_px: int
+    pad_ids: List[int]
+
+
+class CameraCfg(_Base):
+    width: int
+    height: int
+    h_fov_deg: float
+    search_gimbal_deg: float
+    read_gimbal_deg: float
+
+
+class PadCfg(_Base):
+    id: int
+    north: float
+    east: float
+    valid: bool
+    designated: bool = False        # [SYNC-WITH-SIM] one of the briefed "Land" targets
+
+
+class LandingCfg(_Base):
+    hoop_tol_m: float
+
+
+class FailsafeCfg(_Base):
+    battery_rtl_pct: int
+    phase1_max_s: float
+    phase2_budget_s: float
+    lock_timeout_s: float
+
+
+class EvaderCfg(_Base):
+    secure_autonomous_first: bool
+    contain_with_chokepoints: bool
+
+
+class DroneUnitCfg(_Base):
+    """One drone: control IP ↔ UWB tag id ↔ arena start (north, east) m.
+    Sim: ip+start given (config-resolved discovery). Real: tag_id only — ip is
+    Dola-discovered and the start is read from UWB at runtime."""
+    tag_id: int
+    ip: Optional[str] = None
+    start: Optional[List[float]] = None
+
+
+class DiscoveryCfg(_Base):
+    use_dola: bool = False      # real day: broadcast-discover IPs via Dola (else config IPs)
+
+
+class MissionConfig(_Base):
+    meta: MetaCfg
+    frame: FrameCfg
+    speed: SpeedCfg
+    uwb: UwbCfg
+    drones: List[DroneUnitCfg]
+    planner: PlannerCfg
+    aruco: ArucoCfg
+    camera: CameraCfg
+    pads: List[PadCfg]
+    landing: LandingCfg
+    failsafe: FailsafeCfg
+    evader: EvaderCfg
+    discovery: Optional[DiscoveryCfg] = None    # real day; absent on sim → config-IP discovery
+
+    def valid_pads(self) -> List[PadCfg]:
+        return [p for p in self.pads if p.valid]
+
+    def designated_pads(self) -> List[PadCfg]:
+        """Valid AND designated pads — the only ones part-1 scoring counts."""
+        return [p for p in self.pads if p.valid and p.designated]
+
+    def drone_units(self) -> List[DroneUnitCfg]:
+        return list(self.drones)
+
+    def ip_for_tag(self) -> dict:
+        return {u.tag_id: u.ip for u in self.drones if u.ip is not None}
+
+    def starts_by_tag(self) -> dict:
+        return {u.tag_id: (u.start[0], u.start[1])
+                for u in self.drones if u.start is not None}
+
+    def use_dola(self) -> bool:
+        return bool(self.discovery and self.discovery.use_dola)
+
+
+def load_config(path=None) -> MissionConfig:
+    """Load + validate the mission config (sim/default). Unknown keys raise `ValidationError`."""
+    p = Path(path) if path is not None else DEFAULT_CONFIG_PATH
+    data = yaml.safe_load(p.read_text())
+    return MissionConfig(**data)
+
+
+REAL_CONFIG_PATH = DEFAULT_CONFIG_PATH.parent / "mission_real.yaml"
+
+
+def load_real_config(path=None) -> MissionConfig:
+    """Load the REAL-hardware profile (`config/mission_real.yaml`). The real profile writes
+    pads as `{id: {x, y}}` + a `designated_pads` list (the deck's shape); this translates them
+    to the internal `pads: [{id, north, east, valid, designated}]` so mission code is unchanged.
+    `mission_config.yaml` (sim) is never touched."""
+    p = Path(path) if path is not None else REAL_CONFIG_PATH
+    data = yaml.safe_load(p.read_text())
+    designated = {int(i) for i in data.pop("designated_pads", [])}
+    pads = data.get("pads")
+    if isinstance(pads, dict):                  # {id: {x, y}} → list[PadCfg]
+        data["pads"] = [{"id": int(pid), "north": float(pp["x"]), "east": float(pp["y"]),
+                         "valid": True, "designated": int(pid) in designated}
+                        for pid, pp in pads.items()]
+    return MissionConfig(**data)

@@ -1,0 +1,5 @@
+# arena_real.yaml — REAL UWB cage as an OPEN box (no crates). The pad coords span ~1.3–8.7 m
+# in the cage frame; bounds are generous to cover any cage origin (0/0, 5.5/0, 5.5/5.5).
+# Drop in the real crate map here if the cage has obstacles — the planner re-routes around them.
+arena: { length_m: 11.0, width_m: 11.0, height_m: 3.0 }
+crates: []

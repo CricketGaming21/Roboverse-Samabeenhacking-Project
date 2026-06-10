@@ -4,8 +4,87 @@
 
 | Phase | Status | Tests (gate / full) | Commit | Notes |
 |------|--------|---------------------|--------|-------|
-| P0   | ✅ GREEN | 41 / 41            | (this) | fake SDK substrate |
-| P1   | TODO   | – / –               | –      | not started |
+| P0   | ✅ GREEN | 41 / 41            | 54444c9 | fake SDK substrate |
+| P1   | ✅ GREEN | 26 / 67            | 6b12d91 | config + frames + fly_to_uwb |
+| P2   | ✅ GREEN | 19 / 86            | d29f1ec | planner geometry + projection |
+| P3   | ✅ GREEN | 13 / 99            | de673b8 | reactive avoidance guard |
+| P4   | ✅ GREEN | 7 / 106            | 75f1195 | phase-1 deploy + land in hoop |
+| P5   | ✅ GREEN | 8 / 114            | bc766fd | perception: aruco + detector seam |
+| P6   | ✅ GREEN | 12 / 126           | 2973a80 | shared world model |
+| P7   | ✅ GREEN | 9 / 135            | d7aaac1 | phase-2 search + lock-on + tag |
+| P8   | ✅ GREEN | 9 / 144            | 77e2a0b | adversarial evader handling |
+| P9   | ✅ GREEN | 9 / 153            | 759bd7f | planner GUI export contract |
+| P10  | ✅ GREEN | 10 / 163           | f0cd72d | C2 operator console |
+| P11  | ✅ GREEN | 7 / 170 (+1 skip)  | (this) | full integration + reliability |
+
+**ALL PHASES GREEN — full suite: 174 passed, 1 skipped (the real-sim `integration` test).**
+
+## Real-hardware enablement (UWB cage) — sim path kept working, fake gate green (203 passed)
+Made the mission flyable on real HULA hardware while leaving the sim path untouched (it still
+loads `mission_config.yaml` + the sim `pyhulax`). TDD, one commit per layer:
+- **`config/mission_real.yaml`** (loaded by `--real`; never edits the sim config): the 5 real pads
+  (`{id:{x,y}}` → internal list), `designated_pads:[11,51,101]`, `uwb.origin_x|y` (per-cage origin),
+  `discovery.use_dola:true`, **tag-only** `drones`, safety (≤0.5 m/s, 1.1 m, hoop 0.20 m, battery RTL,
+  hold-on-dropout). `load_real_config()` translates it; schema extensions are backward-compatible
+  (uwb origin defaults, optional drone ip/start, optional `discovery`). Open-cage `arena_real.yaml`.
+- **UWB cage origin**: `UWBParserThread(x_origin, y_origin)` started from config; the fake applies it
+  (origin 0 unchanged) so it's tested.
+- **Discovery** `resolve_ordered()` — Dola-discover then map drones to the configured tag_ids **in
+  order** (deck slide-6), logged; config fallback when Dola is stubbed/absent.
+- **`--real` entrypoint** (`python -m mission.runtime.main --real`): Dola-ordered discover+connect,
+  UWB cage origin, **starts read from UWB**, assign the 3 designated pads (nearest, no crossing), fly
+  ≤0.5 m/s at ~1.1 m UWB-only landing, basic Phase-2; **finally lands every drone**, Ctrl-C →
+  abort-and-land, per-drone status lines (connected / UWB / target pad / state). Config-driven arena path.
+- **Staged bring-up scripts** (motion gated behind `--i-have-clear-space`, land-in-finally, public-API
+  only): `connect_check.py` (read-only telemetry + live UWB; validates the cage origin & ip↔tag),
+  `hover_test.py` (first arming), `camera_check.py` (live ArUco on real frames), `yaw_calibrate.py`
+  (forward-nudge → set `frame.yaw_offset_deg`/`invert_*`, no code change). Each runs as
+  `python scripts/<x>.py` (self-bootstraps `src` onto the path).
+- **Landing robustness**: the success gate now averages independent UWB samples (a single 5 cm read
+  flipped pass/fail even when centred); the report counts from `worker.landed_ok`.
+- **Verified**: full fake suite 203 passed; `connect_check`/`--real` wiring tested on the fakes; the
+  SIM run (no `--real`) still lands **3/3 SCORED** (sim LandingScorer, ~2–4 cm). The live `--real` path
+  needs the real cage (the sim's `Dola` is stubbed + the real config has no IPs), so it's fake-verified
+  here and climbs the `docs/SIM_VS_REAL.md` ladder on the day.
+
+## Refinements (docs/REFINEMENTS.md) — one at a time, human review between each
+### R1 — Phase-1 ArUco removal ✅ (committed `809bd79`)
+Roster check: live sim `rovers.motion: convoy` (baseline). Phase 1 now lands **purely on UWB** — all
+ArUco decode/confirm removed from `land_in_hoop` + the `LAND_HOOP` path (dropped `confirm_pad`/`stream`/
+`pad_id`/`_decode_ids`/`confirm_pad_aruco`); the camera is **off in Phase 1** (stream created but
+`set_video_stream(True)` deferred to Phase-2 start in `worker.run_phase2`). Phase-2 pad-id exclusion
+(skip 10–14) **kept**. Fake gate: 174 passed, 1 skipped (new tests: Phase-1 lands with `cv2.aruco`
+monkeypatched to raise → proves UWB-only; `video_enabled` False through Phase 1, True at Phase-2 start).
+**Supervised sim verify (`/tmp/r1.mp4`, cycles=1): still 3/3 in-hoop (sim LandingScorer pads 12/11/10 @
+1–2 cm SCORED); compliance 0 violations; no UWB/connect errors.** Stopped for review before R2.
+
+## Integration session vs the LIVE sim (~/codes/finals/sim, in-process) — `python -m mission.runtime.main`
+Ran the mission end-to-end against the real `pyhulax` + PyBullet sim (booted in-process by
+`connect()`). **Live results (authoritative sim referees): Phase 1 = 3/3 landings SCORED in-hoop
+(0.30 m), pads 12/11/10 @ 2–3 cm; Phase 2 = 4/5 convoy rovers tagged per single run; 0 compliance
+violations; no UWB/connect issues.** Across 3 runs the *missing* rover varied (runs banked
+{22,20,23}, {22,23,20,24}, {22,20,24,21}) so the **union is all 5** — the single-run 4/5 is a
+coverage/timing limit of the general overwatch grid (the mission can't know the convoy routes), not
+a bug. Recording at `/tmp/mission_run.mp4` (HULA_SIM_RECORD).
+Reconciliation fixes made this session (TDD, fake gate stays green):
+- **Discovery** is config-first (`config.drones` map) — the sim's `Dola` raises `NotImplementedError`;
+  Dola is opt-in for the real day with a transparent fallback (`runtime/discovery.py`).
+- **Fake speed** encodes the sim's raw VelocityLevel band (ZOOM 0.8/TURBO 1.0) but hard-clamps every
+  level to 0.5 m/s; enum ints unchanged.
+- **sdk_compat** now also guards `arm`/`disarm`; verified nothing in `src/` calls real-only methods unguarded.
+- **Real bug the sim exposed:** mission read arena position from fake-only `drone.n/.e` (fatal on the real
+  `DroneAPI`) — now reads **UWB** everywhere (`worker.py`, `phase2_search.py`), with a fake-only fallback.
+- **fly_to_uwb** gained a position-dwell arrival fallback (the real 10 Hz + 5 cm UWB makes the instantaneous
+  speed gate too noisy).
+- **Phase-2 compliance fix:** vantage hops now route around inflated footprints (a straight hop cut over a
+  crate → `over_crate` + ToF-altitude-hold climbed over the crate top → `altitude_cap` breach). After the fix:
+  **0 violations.**
+- **lock_and_tag** now banks on the referee's gate (marker ≥40 px AND fully in-frame, held 5 frames) instead
+  of tight centering, so the mission's own belief matches the sim scorer.
+Remaining gap: rover id 21 not always caught in a short run — a **coverage** limitation of the general
+overwatch grid (the mission can't know the convoy routes), not a control/compliance bug. `@integration`
+test (`RUN_INTEGRATION=1 PYTHONPATH=…/sim pytest -m integration`) drives a short real-sim episode and
+asserts 3/3 landings via the sim's authoritative LandingScorer.
 
 ## Reference-source note (read once)
 The authoritative `reference/pyhulax_knowledge_base.txt` and `reference/brief/Finals_brief.pdf`
@@ -19,6 +98,148 @@ real sim and the KB) and the vendored `provided_code/` (`UWBParserThread.py`, `d
 signatures — the fake encodes the doc's values.
 
 ## Log
+
+### P11 — Full integration + reliability + sim handoff  ✅
+Built `src/mission/runtime/discovery.py` (`Discovery`: `pyhulax.discovery.Dola` → fallback
+`dola.py`, `plane_id`↔`tag_id` map, `fixed_ips` short-circuit for the sim — no network),
+`src/mission/runtime/main.py` (`Mission`: spawns a `DroneWorker` per drone, runs Phase 1 → Phase 2
+sequentially-deterministic or `parallel=True` threaded, **reassigns a dead drone's zone** via a
+mop-up pass, and **lands every drone in `run()`'s `finally`**), and `docs/SIM_VS_REAL.md` (the
+import-path swap + on-the-day calibration checklist). Added a **battery RTL failsafe** to
+`DroneWorker` (`FailsafeAbort` raised from `_on_step` when `get_battery() ≤ threshold` → safe land,
+`rtl=True`). Tests: a full Phase1→Phase2 run on the fake harness scores **3/3 landings + all 5
+distinct tags, no double-count, every drone landed on shutdown**; battery RTL lands safely;
+persistent UWB dropout holds without lurching; a sabotaged (dead) drone's zone is reassigned and
+still fully tagged; `run()` lands all even when a phase raises; discovery resolves fixed IPs and via
+the (fake) Dola. The real-sim end-to-end test is implemented + `@pytest.mark.integration` (skipped
+in the gate; run supervised with `RUN_INTEGRATION=1`).
+
+### P10 — C2 operator console  ✅
+Built `src/mission/runtime/c2_bridge.py` (`C2Bridge`: `snapshot`/`to_json` of drones + footprints +
+zones + rover tracks + coarsened belief heatmap + rubric scoreboard + alarms — all
+JSON-serializable from the public world model only; `alarms` surfaces low-battery, UWB-dropout,
+near-collision and the **over-footprint NO-FLY** violation; `export_evidence` writes one annotated
+PNG per tagged id + a results.csv + a map.json bundle; `override` routes operator commands into the
+Coordinator) and a single-file `c2/index.html` (live top-down map with belief heatmap, camera
+tiles, scoreboard, alarm panel with the over-footprint highlight, pre-flight checklist, evidence
+export + override buttons; polls `state.json` with an embedded-sample fallback). Added operator
+override support to `Coordinator` (`force`/`hold_all`/`clear_all`, applied in `step`). Tests:
+snapshot is valid JSON, the over-footprint alarm fires on a synthetic violating pose (and not on a
+clean one), battery/UWB/near-collision alarms fire, scoreboard reflects state, the evidence bundle
+is produced, and retask/hold-all/resume overrides reach the coordinator.
+
+### P9 — Mission Planner GUI export contract  ✅
+Built `src/mission/mission/plan.py` (pydantic `MissionPlan` loader, `extra="forbid"`; `validate_plan`
+enforces the geometric rules — every route segment footprint-clear + in bounds, vantages inside
+their footprint-clear bubble, bubbles pairwise disjoint with a buffer, pad_ids valid — raising
+`PlanValidationError`; consumer helpers `pad_assignment`/`route`/`bubble`/`vantages`) and a single-
+file `planner_gui/index.html` (canvas authoring of routes + vantages with live red-on-invalid
+validation, inter-path conflict highlight, and `mission_plan.yaml`/PNG export matching the schema).
+**Fixed the committed `examples/mission_plan.example.yaml`** — the scaffold's route 0 crossed the
+inflated crate (invalid); re-authored all three drones with footprint-clear routes to their pads,
+vantages inside disjoint east-band bubbles, and valid pad ids (PHASE_PLAN authorizes maintaining
+this fixture). Tests: the example loads + validates + is consumed by P4 (pads valid, routes clear)
+and P7 (vantages in bubbles, correct dict shape); unknown keys, a crate-crossing route, an out-of-
+bubble vantage, an invalid pad (13), and overlapping bubbles each raise.
+
+### P8 — Adversarial evader handling  ✅
+Added evader logic to `phase2_search.py`: `classify_behaviour` triages a track's recent path into
+smooth/periodic/erratic from turn-angle variance + loop-closure; `ReachableSet` models where an
+evader can be on the free-space grid (`seed`/`expand`/`cut`/`size`) so holding a chokepoint
+(`cut`) is **monotonically non-increasing** by construction (the connected component from the
+anchor can only shrink as barriers are added); `plan_containment` picks the chokepoints bordering
+the reachable set. Extended `Coordinator` with behaviour-aware tasking: **secure the predictable
+autonomous tags first** (no evader commitment while untagged autonomous tracks remain), then a
+pursuer TAGs the belief argmax while others BLOCK chokepoints, with **tick-based rotation** of the
+block assignments to break standoffs. Tests cover triage, monotonic containment + room isolation,
+the autonomous-before-evader ordering, pursuit/containment role assignment, and rotation. Full
+teleop realism is an `integration` test (needs the sim's evasive mode) — excluded from the gate.
+
+### P7 — Phase 2: search + lock-on + tag  ✅
+Built `src/mission/mission/phase2_search.py`: `lock_and_tag` is a visual servo on the marker's
+pixel offset (camera nadir, image axes == body axes at locked yaw), holds `hold_frames` consecutive
+centred frames then banks the id — bounded by `lock_timeout_s` (no deadlock), `should_stop`-
+interruptible, and it velocity-matches a slow mover. `vantage_patrol` cycles preplanned look-points
+(fly→tilt→dwell-scan, not a lawnmower). `phase2_search` drives the cycle with **bubble-gating**
+(engage only rovers whose projected xy is in the drone's zone — others are logged to the taskboard),
+a **commitment rule** (a started lock runs to completion regardless of the boundary), and a
+**mop-up** endgame (drop the gate in the last cycles). Extended `worker.py` with phase-2 states
+(RELAUNCH/SEARCH/CONVERGE/HOME/DONE) and `run_phase2`. Tests: servo banks a stationary + a moving
+rover, lock is time-boxed and interruptible, bubble-gate logs-but-doesn't-tag out-of-zone, mop-up
+tags it, and **3 drones tag all 5 distinct ids with no double-count, no footprint overfly, ≤0.5 m/s
+throughout** (rover marker xy via `projection.pixel_to_arena`, de-dup via shared `MissionState`).
+
+### P6 — Shared world model  ✅
+Built `world/mission_state.py` (lock-guarded tagged-id set + evidence, **de-dup by id**),
+`world/taskboard.py` (`Track` + `Role`/`Assignment`; `see` merges by id and estimates velocity
+from Δ), `world/belief_grid.py` (numpy occupancy over free cells: `observe` collapses + renorms,
+`diffuse` spreads through free neighbours, `spike` injects a sighting, `argmax_region`, and
+`chokepoints` extracts narrow gaps from the crate map), and `world/coordinator.py`
+(`Coordinator.step` TAGs confirmed-untagged rovers with the nearest free drone, SWEEPs the rest
+to the belief argmax, and leaves `busy_locked` drones alone — the P7 commitment hook). All shared
+objects are `threading.Lock`-guarded. Tests cover de-dup, velocity estimation, belief
+collapse/diffuse/spike, chokepoint extraction, and coordinator role logic incl. already-tagged
+and locked-drone cases.
+
+### P5 — Perception: ArUco + detector seam + two-stage  ✅
+Built `src/mission/perception/detector.py` (`Detection` dataclass, `RoverDetector` ABC,
+`PlaceholderRoverDetector` + PRIMARY `ClassicalRoverDetector` (contrast/contour + optional motion
+gate), `ScanResult`, `two_stage_scan` — mirrors `reference/provided_code/rover_detection_example.py`)
+and `src/mission/perception/aruco.py` (`confirm_with_aruco` multi-marker decode with a
+`min_marker_px` gate, `is_pad_id`/`is_rover_id` where **pads=10–14 and ANY other id is a rover**,
+`split_pads_rovers`). The import cycle (two_stage→aruco→Detection) is broken by a lazy import inside
+`two_stage_scan`. Tests decode multiple + tilted markers off rendered frames, prove the px gate, the
+classical finder boxes a rendered rover near frame-centre, and `two_stage_scan` runs find→approach→
+confirm end-to-end returning the rover id.
+
+### P4 — Phase 1: deploy + land in hoop  ✅
+Built `src/mission/mission/phase1_land.py` (`assign_pads` brute-forces drone→pad permutations
+minimising total route length with a heavy crossing penalty; `land_in_hoop` centres on UWB to the
+hoop tolerance, gates the descent on footprint-clear column + clear `down` sensor, optionally
+decode-confirms the pad ArUco, then descends only while centred and lands) and
+`src/mission/mission/worker.py` (`DroneWorker` FSM INIT→TAKEOFF→GO_TO_PAD→LAND_HOOP→LANDED, plans
+its route via the visibility graph, records a trace, lands on any exception so one drone never
+freezes the others). Tests: assignment selects the correct 3 valid pads with no crossing; landing
+refuses when the pad sits on a footprint; 3 drones each route + land within `hoop_tol_m=0.15` and
+**no trace point ever enters a raw footprint**.
+
+### P3 — Reactive avoidance guard + plan-then-guard  ✅
+Built `src/mission/control/avoidance.py`: `ReactiveGuard.filter(cmd_fwd, cmd_right, obstacles, *,
+open_side_hint=None) -> (fwd, right, up)` with `up` hard-wired to **0.0** (never climbs — HARD
+invariant #3), stops the blocked travel axis, slides toward the open lateral side with
+anti-oscillation **commit hysteresis**, and reports `boxed()` when surrounded. `separation(my_xy,
+others, my_priority, sep_m)` implements right-of-way (lower priority yields). Wired into
+`fly_to_uwb` via `guard=`, passing a goal-aware `open_side_hint` (sign of the body-right velocity)
+so the slide naturally heads toward the goal. An exhaustive test sweeps all 2^5 obstacle combos ×
+command grid asserting `up == 0`; the integration test flies a guarded drone past a *surprise*
+crate (unknown to the planner) and proves it reaches the goal, never enters the footprint interior,
+and never commands +up.
+
+### P2 — Crate map + planner geometry + projection  ✅
+Built `src/mission/planner/arena.py` (loads `config/arena_truth.yaml` with `yaml.safe_load`,
+**no simcore** — HARD invariant #10), `src/mission/planner/geometry.py` (`inflate` →
+axis-aligned `Rect`s; `segment_clear` via Liang-Barsky against slightly-shrunk rects so
+boundary-tangent edges are allowed but interior crossings are rejected; `build_graph`
+visibility graph over pushed-out footprint corners; `plan_path` A* with start/goal as temp
+nodes; `paths_conflict` via segment-segment distance), and `src/mission/planner/projection.py`
+(pinhole `arena_to_pixel`/`pixel_to_arena`, exact inverses, **no depth**). Tests prove paths
+never cross an inflated footprint or leave bounds, `None` when goal is blocked / arena is walled
+off, the real `arena_truth` routes cleanly, conflict detection flags crossing/too-close paths,
+projection round-trips to 1e-6, and `pixel_to_arena` recovers a **rendered** marker's known arena
+position to within 0.1 m (ties projection.py to the fake camera model — they share the pinhole).
+
+### P1 — Config + frames + UWB control loop  ✅
+Built `src/mission/config.py` (pydantic, every section `extra="forbid"` → unknown keys raise;
+a validator enforces `speed.max_mps ∈ (0, 0.5]` as the HARD cap), `src/mission/frames.py`
+(`arena_to_body`/`body_to_arena` as exact-inverse rotations, `m_to_cm`/`cm_to_m`, `clamp_speed`),
+`src/mission/runtime/sdk_compat.py` (`prepare_manual_control`/`release` route real-only calls
+through `hasattr` — no-op on the sim fake, real on `RealLikeFakeDroneAPI`), and
+`src/mission/control/uwb_loop.py::fly_to_uwb` (P control on UWB arena error → body sticks, hard
+clamp ≤0.5 m/s, ToF altitude hold, **hold-on-dropout**, UWB-derived arrival speed Δpos/Δt). The
+loop is deterministic in tests via an injectable `sleep` (no real waits) and the time-stepped
+fake. Converges from 5 start/target poses incl. corner-to-corner and under 3 cm UWB noise; a
+test proves per-step speed never exceeds 0.5 m/s and another proves a horizontal freeze on UWB
+dropout. Frame transforms are inverse-consistent and match hand-worked yaw-0 / yaw-90 cases.
 
 ### P0 — Test substrate (fake SDK)  ✅
 Built `tests/fakes/fake_pyhulax.py`, `tests/fakes/fake_uwb.py`, `tests/conftest.py`,

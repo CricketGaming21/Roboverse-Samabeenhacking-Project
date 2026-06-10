@@ -1,0 +1,77 @@
+# mission_real.yaml — REAL-HARDWARE profile (UWB cage). Loaded by `python -m mission.runtime.main --real`.
+# Do NOT edit mission_config.yaml (the sim path uses that). Coords are METRES in the UWB cage frame.
+# The frame transform is parametric via frame.yaw_offset_deg / invert_* — calibrate with
+# scripts/yaw_calibrate.py, NO code change needed.
+meta:
+  seed: 42
+
+frame:                       # calibrate on the day (scripts/yaw_calibrate.py); no code change
+  yaw_offset_deg: 0.0
+  lock_yaw: true
+  invert_right: false
+  invert_forward: false
+
+speed:
+  max_mps: 0.5               # HARD cap
+  cruise_alt_m: 1.1
+  climb_mps: 0.5
+  arrive_tol_m: 0.12
+  ctrl_rate_hz: 20
+  kp_xy: 0.8                 # tune gently on the first cage flights
+  ki_xy: 0.0
+  kp_alt: 0.8
+
+uwb:
+  noise_std_m: 0.05
+  hold_on_dropout: true      # on (None,None,None): hold position, never lurch
+  tag_ids: [0, 1, 2]
+  origin_x: 0.0              # CAGE ORIGIN — Cage1 0/0, Cage2 5.5/0, Cage3 5.5/5.5. SET per assigned cage.
+  origin_y: 0.0
+
+discovery:
+  use_dola: true             # real day: broadcast-discover drone IPs via Dola
+
+drones:                      # ip is Dola-discovered; start is read from UWB at runtime
+  - { tag_id: 0 }
+  - { tag_id: 1 }
+  - { tag_id: 2 }
+
+planner:
+  arena_truth_file: config/arena_real.yaml   # open cage (no crates) until a real map is provided
+  inflate_m: 0.40
+  separation_min_m: 0.8
+
+aruco:
+  dictionary: DICT_6X6_250
+  min_marker_px: 40
+  pad_ids: [11, 45, 51, 67, 101]   # the real pad ids (pads carry NO markers per R1 — landing is UWB-only)
+
+camera:
+  width: 640
+  height: 480
+  h_fov_deg: 71.0
+  search_gimbal_deg: 60
+  read_gimbal_deg: 90
+
+# The 5 real landing pads (metres, UWB cage frame). designated_pads = the 3 to land on
+# (the operator sets the real valid 3 on the day).
+pads:
+  11:  { x: 1.35, y: 4.40 }
+  45:  { x: 1.30, y: 7.85 }
+  51:  { x: 4.40, y: 4.40 }
+  67:  { x: 1.95, y: 8.70 }
+  101: { x: 4.40, y: 7.85 }
+designated_pads: [11, 51, 101]
+
+landing:
+  hoop_tol_m: 0.20           # real hoop tolerance (measured hoop radius minus UWB margin)
+
+failsafe:
+  battery_rtl_pct: 20        # return-and-land threshold
+  phase1_max_s: 480
+  phase2_budget_s: 180
+  lock_timeout_s: 6.0
+
+evader:
+  secure_autonomous_first: true
+  contain_with_chokepoints: true

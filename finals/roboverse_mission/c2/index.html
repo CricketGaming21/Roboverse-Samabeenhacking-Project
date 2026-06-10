@@ -1,0 +1,139 @@
+<!DOCTYPE html>
+<!-- RoboVerse C2 Operator Console (P10). Single file. Polls the C2 bridge JSON
+     (runtime/c2_bridge.py snapshot — written to state.json or served) and renders the live
+     top-down map (drones, footprints, zones, rover tracks, belief heatmap), a rubric
+     scoreboard, alarms (incl. the over-footprint NO-FLY alarm), a pre-flight checklist, an
+     evidence-export trigger, and an operator override layer. Schema = c2_bridge.snapshot(). -->
+<html lang="en">
+<head>
+<meta charset="utf-8"/>
+<title>RoboVerse C2 Console</title>
+<style>
+  body { font: 13px/1.4 system-ui, sans-serif; margin: 0; background: #0b0e13; color: #dfe6ee; }
+  header { padding: 8px 12px; background: #0c0f14; border-bottom: 1px solid #222; display: flex; justify-content: space-between; }
+  #grid { display: grid; grid-template-columns: 1fr 340px; gap: 8px; padding: 8px; }
+  canvas { background: #060a0f; border: 1px solid #1d2733; width: 100%; }
+  .panel { background: #11161e; border: 1px solid #1d2733; border-radius: 6px; padding: 8px; margin-bottom: 8px; }
+  h3 { margin: 0 0 6px; font-size: 12px; color: #9fb3c8; text-transform: uppercase; letter-spacing: .04em; }
+  .score b { font-size: 22px; }
+  .alarm { padding: 4px 6px; border-radius: 4px; margin: 2px 0; }
+  .critical { background: #5a1620; color: #ff9aa6; font-weight: bold; }
+  .warn { background: #4a3a12; color: #ffd98a; }
+  button { background: #1c2530; color: #dfe6ee; border: 1px solid #33445a; border-radius: 5px; padding: 5px 8px; margin: 2px; cursor: pointer; }
+  button.danger { border-color: #a33; }
+  label { display: block; margin: 2px 0; }
+  .ok { color: #5fd35f; } .bad { color: #ff6b6b; }
+</style>
+</head>
+<body>
+<header>
+  <b>RoboVerse C2 — Challenge 2 Operator Console</b>
+  <span>clock <span id="clock">–</span>s &nbsp;|&nbsp; <span id="conn" class="bad">offline</span></span>
+</header>
+<div id="grid">
+  <div>
+    <canvas id="map" width="900" height="540"></canvas>
+    <div class="panel"><h3>Camera tiles</h3><div id="cams" style="display:flex;gap:6px">
+      <div>D0<canvas width="150" height="100" id="cam0" style="width:150px"></canvas></div>
+      <div>D1<canvas width="150" height="100" id="cam1" style="width:150px"></canvas></div>
+      <div>D2<canvas width="150" height="100" id="cam2" style="width:150px"></canvas></div>
+    </div></div>
+  </div>
+  <div>
+    <div class="panel score"><h3>Scoreboard</h3>
+      <div>Landings <b id="landings">0</b> / 3 &nbsp; Tagged <b id="tagged">0</b></div>
+      <div>Distinct ids: <span id="taggedIds">–</span></div>
+      <div>Outstanding: <span id="outstanding" class="bad">–</span></div>
+    </div>
+    <div class="panel"><h3>Alarms</h3><div id="alarms">–</div></div>
+    <div class="panel"><h3>Pre-flight checklist</h3>
+      <label><input type="checkbox"> UWB tags live (0,1,2)</label>
+      <label><input type="checkbox"> Video streams up</label>
+      <label><input type="checkbox"> Pad coords loaded</label>
+      <label><input type="checkbox"> Batteries &gt; 50%</label>
+      <label><input type="checkbox"> Geofence / arena confirmed</label>
+    </div>
+    <div class="panel"><h3>Operator overrides</h3>
+      <button onclick="send({type:'hold_all'})" class="danger">HOLD ALL</button>
+      <button onclick="send({type:'resume'})">RESUME</button><br/>
+      Drone <select id="ovDrone"><option>0</option><option>1</option><option>2</option></select>
+      <button onclick="recall()">Recall</button>
+      <button onclick="designate()">Designate target…</button>
+    </div>
+    <div class="panel"><h3>Evidence</h3>
+      <button onclick="send({type:'export_evidence'})">Export evidence bundle</button>
+    </div>
+  </div>
+</div>
+<script>
+// Schema = src/mission/runtime/c2_bridge.py snapshot(). Embedded sample so the console renders
+// standalone; in operation it polls state.json (the bridge writes it / a thin server serves it).
+let SAMPLE = { clock: 0, drones: [
+    { tag_id: 0, xy: [2.0, 1.0], alt_m: 1.1, battery_pct: 88, state: "SEARCH", uwb_ok: true, over_footprint: false },
+    { tag_id: 1, xy: [5.0, 3.0], alt_m: 1.1, battery_pct: 72, state: "SEARCH", uwb_ok: true, over_footprint: true },
+    { tag_id: 2, xy: [8.0, 5.0], alt_m: 1.1, battery_pct: 19, state: "SEARCH", uwb_ok: false, over_footprint: false }],
+  footprints: [[5.0, 3.0, 0.9, 0.9]], zones: [], tracks: [{ id: 22, xy: [3, 3], velocity: [0.1, 0], behaviour: "smooth", last_seen: 0 }],
+  belief: [], scoreboard: { landings: 3, tagged_ids: [22], tagged_count: 1, outstanding_ids: [20, 21, 23, 24] },
+  alarms: [{ type: "over_footprint", tag_id: 1, severity: "critical", msg: "drone 1 OVER a crate footprint — NO-FLY" },
+           { type: "low_battery", tag_id: 2, severity: "warn", msg: "drone 2 battery 19%" }] };
+
+const ARENA = { length_m: 10, width_m: 6 }, PAD = 24;
+const cv = document.getElementById("map"), ctx = cv.getContext("2d");
+const sx = e => PAD + e / ARENA.width_m * (cv.width - 2 * PAD);
+const sy = n => cv.height - PAD - n / ARENA.length_m * (cv.height - 2 * PAD);
+const DCOL = ["#e6194b", "#3cb44b", "#4363d8"];
+
+function render(s) {
+  document.getElementById("clock").textContent = (+s.clock).toFixed(1);
+  ctx.clearRect(0, 0, cv.width, cv.height);
+  ctx.strokeStyle = "#1d2733";
+  ctx.strokeRect(sx(0), sy(ARENA.length_m), sx(ARENA.width_m) - sx(0), sy(0) - sy(ARENA.length_m));
+  if (s.belief && s.belief.length) {                       // belief heatmap
+    const R = s.belief.length, C = s.belief[0].length, mx = Math.max(...s.belief.flat(), 1e-9);
+    for (let i = 0; i < R; i++) for (let j = 0; j < C; j++) {
+      ctx.fillStyle = `rgba(80,160,255,${0.5 * s.belief[i][j] / mx})`;
+      ctx.fillRect(sx(j / C * ARENA.width_m), sy((i + 1) / R * ARENA.length_m),
+        (sx(ARENA.width_m) - sx(0)) / C, (sy(0) - sy(ARENA.length_m)) / R); } }
+  for (const f of s.footprints) { ctx.fillStyle = "#5a3a3a";   // footprints
+    ctx.fillRect(sx(f[1] - f[3] / 2), sy(f[0] + f[2] / 2), sx(f[1] + f[3] / 2) - sx(f[1] - f[3] / 2),
+      sy(f[0] - f[2] / 2) - sy(f[0] + f[2] / 2)); }
+  for (const t of s.tracks) { ctx.fillStyle = "#caa800"; ctx.beginPath();   // rover tracks
+    ctx.arc(sx(t.xy[1]), sy(t.xy[0]), 5, 0, 7); ctx.fill();
+    ctx.fillText("r" + t.id, sx(t.xy[1]) + 6, sy(t.xy[0])); }
+  for (const d of s.drones) { ctx.fillStyle = d.over_footprint ? "#ff2b2b" : DCOL[d.tag_id] || "#fff";
+    ctx.beginPath(); ctx.arc(sx(d.xy[1]), sy(d.xy[0]), 8, 0, 7); ctx.fill();
+    ctx.fillStyle = "#fff"; ctx.fillText("D" + d.tag_id, sx(d.xy[1]) - 6, sy(d.xy[0]) - 11);
+    if (d.over_footprint) { ctx.strokeStyle = "#ff2b2b"; ctx.lineWidth = 3;
+      ctx.beginPath(); ctx.arc(sx(d.xy[1]), sy(d.xy[0]), 13, 0, 7); ctx.stroke(); ctx.lineWidth = 1; } }
+  const sc = s.scoreboard || {};
+  document.getElementById("landings").textContent = sc.landings ?? 0;
+  document.getElementById("tagged").textContent = sc.tagged_count ?? 0;
+  document.getElementById("taggedIds").textContent = (sc.tagged_ids || []).join(", ") || "–";
+  document.getElementById("outstanding").textContent = (sc.outstanding_ids || []).join(", ") || "none";
+  const al = document.getElementById("alarms");
+  al.innerHTML = (s.alarms && s.alarms.length)
+    ? s.alarms.map(a => `<div class="alarm ${a.severity}">${a.msg}</div>`).join("")
+    : '<span class="ok">all clear</span>';
+}
+
+// --- override / command plumbing (POSTs to the bridge if served; logs otherwise) --- //
+function send(cmd) {
+  fetch("command", { method: "POST", headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(cmd) }).catch(() => console.log("override (offline):", cmd));
+}
+function recall() { send({ type: "recall", tag_id: +document.getElementById("ovDrone").value }); }
+function designate() { const xy = prompt("target north,east (m)", "5,3");
+  if (xy) { const [n, e] = xy.split(",").map(Number);
+    send({ type: "designate", tag_id: +document.getElementById("ovDrone").value, target: [n, e] }); } }
+
+// --- live poll with embedded-sample fallback --- //
+async function poll() {
+  try { const r = await fetch("state.json", { cache: "no-store" });
+    if (r.ok) { const s = await r.json(); document.getElementById("conn").textContent = "live";
+      document.getElementById("conn").className = "ok"; render(s); return; } } catch (e) {}
+  document.getElementById("conn").textContent = "sample"; render(SAMPLE);
+}
+poll(); setInterval(poll, 1000);
+</script>
+</body>
+</html>
