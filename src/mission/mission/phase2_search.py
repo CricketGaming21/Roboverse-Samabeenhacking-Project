@@ -79,7 +79,8 @@ def _marker_xy(bbox, cam_xy: Optional[Point], yaw_deg: float, alt_m: float,
 # lock-on + tag (visual servo)
 # --------------------------------------------------------------------------- #
 def lock_and_tag(drone, stream, detection, state, *, hold_frames: int = 5,
-                 center_tol_px: int = 45, lock_timeout_s: float = 6.0,
+                 center_tol_px: int = 45, min_marker_px: int = 40,
+                 frame_margin_px: int = 8, lock_timeout_s: float = 6.0,
                  rate_hz: float = 20.0, kp_px: float = 0.02, gimbal_deg: float = 90.0,
                  max_mps: float = 0.5, alt_m: float = 1.1,
                  intrinsics: Optional[CameraIntrinsics] = None, uwb=None,
@@ -117,7 +118,15 @@ def lock_and_tag(drone, stream, detection, state, *, hold_frames: int = 5,
             continue
         bx, by, bw, bh = match.bbox
         ex, ey = (bx + bw / 2) - cx, (by + bh / 2) - cy   # +ex=east, +ey=north (nadir)
-        if math.hypot(ex, ey) <= center_tol_px:
+        # Bank on the SAME gate the referee scores on: marker big enough AND fully in
+        # frame, held `hold_frames` frames — NOT tight centering (a moving rover is rarely
+        # dead-centre; the camera only needs to hold it in view).
+        h_px, w_px = rgb.shape[0], rgb.shape[1]
+        side = max(bw, bh)
+        in_frame = (bx >= frame_margin_px and by >= frame_margin_px
+                    and bx + bw <= w_px - 1 - frame_margin_px
+                    and by + bh <= h_px - 1 - frame_margin_px)
+        if side >= min_marker_px and in_frame:
             held += 1
             if held >= hold_frames:
                 cam_xy = drone_arena_xy(drone, uwb, tag_id)
@@ -128,6 +137,7 @@ def lock_and_tag(drone, stream, detection, state, *, hold_frames: int = 5,
                 return True
         else:
             held = 0
+        # servo toward centre to KEEP the marker in frame (not to satisfy a centre gate)
         fwd = max(-1.0, min(1.0, kp_px * ey))
         right = max(-1.0, min(1.0, kp_px * ex))
         drone.send_manual_control(fwd, right, up, 0.0)
@@ -184,7 +194,7 @@ def phase2_search(drone, uwb, tag_id: int, vantages: Sequence[dict], stream, sta
                   budget_cycles: int = 6, mopup_extra_cycles: int = 2,
                   dwell_s: float = 1.0, gimbal_deg: float = 90.0, rate_hz: float = 20.0,
                   lock_timeout_s: float = 6.0, center_tol_px: int = 45,
-                  kp_px: float = 0.02, hold_frames: int = 5,
+                  min_marker_px: int = 40, kp_px: float = 0.02, hold_frames: int = 5,
                   intrinsics: Optional[CameraIntrinsics] = None, alt_m: float = 1.1,
                   graph=None, sleep=time.sleep, clock: Callable[[], float] = time.time,
                   on_step=None, **loop_kwargs) -> set:
@@ -216,7 +226,8 @@ def phase2_search(drone, uwb, tag_id: int, vantages: Sequence[dict], stream, sta
                 continue                                  # gated out of our zone (logged)
             # commitment: a started lock runs to completion (bounded)
             if lock_and_tag(drone, stream, d, state, hold_frames=hold_frames,
-                            center_tol_px=center_tol_px, lock_timeout_s=lock_timeout_s,
+                            center_tol_px=center_tol_px, min_marker_px=min_marker_px,
+                            lock_timeout_s=lock_timeout_s,
                             rate_hz=rate_hz, kp_px=kp_px, gimbal_deg=gimbal_deg,
                             intrinsics=intrinsics, uwb=uwb, tag_id=tag_id, alt_m=alt_m,
                             sleep=sleep, clock=clock, on_step=on_step):
