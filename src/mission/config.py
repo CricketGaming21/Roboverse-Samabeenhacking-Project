@@ -8,7 +8,7 @@ Enforces the HARD speed cap (`speed.max_mps` must be > 0 and ≤ 0.5).
 from __future__ import annotations
 
 from pathlib import Path
-from typing import List
+from typing import List, Optional
 
 import yaml
 from pydantic import BaseModel, ConfigDict, field_validator
@@ -54,6 +54,8 @@ class UwbCfg(_Base):
     noise_std_m: float
     hold_on_dropout: bool
     tag_ids: List[int]
+    origin_x: float = 0.0       # per-cage UWB origin (real day); the latest UWBParserThread applies it
+    origin_y: float = 0.0
 
 
 class PlannerCfg(_Base):
@@ -102,11 +104,15 @@ class EvaderCfg(_Base):
 
 class DroneUnitCfg(_Base):
     """One drone: control IP ↔ UWB tag id ↔ arena start (north, east) m.
-    Mirrors the sim's `drones.units` so discovery resolves from config in-sim
-    (the sim's `Dola` raises NotImplementedError — see runtime/discovery.py)."""
-    ip: str
+    Sim: ip+start given (config-resolved discovery). Real: tag_id only — ip is
+    Dola-discovered and the start is read from UWB at runtime."""
     tag_id: int
-    start: List[float]
+    ip: Optional[str] = None
+    start: Optional[List[float]] = None
+
+
+class DiscoveryCfg(_Base):
+    use_dola: bool = False      # real day: broadcast-discover IPs via Dola (else config IPs)
 
 
 class MissionConfig(_Base):
@@ -122,6 +128,7 @@ class MissionConfig(_Base):
     landing: LandingCfg
     failsafe: FailsafeCfg
     evader: EvaderCfg
+    discovery: Optional[DiscoveryCfg] = None    # real day; absent on sim → config-IP discovery
 
     def valid_pads(self) -> List[PadCfg]:
         return [p for p in self.pads if p.valid]
@@ -134,14 +141,37 @@ class MissionConfig(_Base):
         return list(self.drones)
 
     def ip_for_tag(self) -> dict:
-        return {u.tag_id: u.ip for u in self.drones}
+        return {u.tag_id: u.ip for u in self.drones if u.ip is not None}
 
     def starts_by_tag(self) -> dict:
-        return {u.tag_id: (u.start[0], u.start[1]) for u in self.drones}
+        return {u.tag_id: (u.start[0], u.start[1])
+                for u in self.drones if u.start is not None}
+
+    def use_dola(self) -> bool:
+        return bool(self.discovery and self.discovery.use_dola)
 
 
 def load_config(path=None) -> MissionConfig:
-    """Load + validate the mission config. Unknown keys raise `ValidationError`."""
+    """Load + validate the mission config (sim/default). Unknown keys raise `ValidationError`."""
     p = Path(path) if path is not None else DEFAULT_CONFIG_PATH
     data = yaml.safe_load(p.read_text())
+    return MissionConfig(**data)
+
+
+REAL_CONFIG_PATH = DEFAULT_CONFIG_PATH.parent / "mission_real.yaml"
+
+
+def load_real_config(path=None) -> MissionConfig:
+    """Load the REAL-hardware profile (`config/mission_real.yaml`). The real profile writes
+    pads as `{id: {x, y}}` + a `designated_pads` list (the deck's shape); this translates them
+    to the internal `pads: [{id, north, east, valid, designated}]` so mission code is unchanged.
+    `mission_config.yaml` (sim) is never touched."""
+    p = Path(path) if path is not None else REAL_CONFIG_PATH
+    data = yaml.safe_load(p.read_text())
+    designated = {int(i) for i in data.pop("designated_pads", [])}
+    pads = data.get("pads")
+    if isinstance(pads, dict):                  # {id: {x, y}} → list[PadCfg]
+        data["pads"] = [{"id": int(pid), "north": float(pp["x"]), "east": float(pp["y"]),
+                         "valid": True, "designated": int(pid) in designated}
+                        for pid, pp in pads.items()]
     return MissionConfig(**data)
