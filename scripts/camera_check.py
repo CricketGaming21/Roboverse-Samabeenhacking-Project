@@ -11,10 +11,18 @@ Public API only.
 
 from __future__ import annotations
 
+import os
+import sys
 import time
-from typing import Callable, List, Tuple
 
-from mission.perception.aruco import confirm_with_aruco
+_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+for _p in (_ROOT, os.path.join(_ROOT, "src")):
+    if _p not in sys.path:
+        sys.path.insert(0, _p)
+
+from typing import Callable, List, Tuple                            # noqa: E402
+
+from mission.perception.aruco import confirm_with_aruco            # noqa: E402
 
 
 def scan_frames(drone, stream, *, frames: int = 30, dictionary: str = "DICT_6X6_250",

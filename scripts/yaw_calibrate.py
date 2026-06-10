@@ -9,10 +9,18 @@ stick (the SDK clamps to ≤ 0.5 m/s); lands in a `finally`.
 
 from __future__ import annotations
 
+import os
+import sys
 import time
-from typing import Callable, Optional, Tuple
 
-from mission.runtime import sdk_compat
+_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+for _p in (_ROOT, os.path.join(_ROOT, "src")):
+    if _p not in sys.path:
+        sys.path.insert(0, _p)
+
+from typing import Callable, Optional, Tuple                       # noqa: E402
+
+from mission.runtime import sdk_compat                             # noqa: E402
 
 
 def nudge_forward(drone, uwb, tag_id: int, *, height_cm: int = 100, fwd_stick: float = 0.3,

@@ -10,10 +10,18 @@ Public API only; real-only init via sdk_compat (guarded).
 
 from __future__ import annotations
 
+import os
+import sys
 import time
-from typing import Callable
 
-from mission.runtime import sdk_compat
+_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+for _p in (_ROOT, os.path.join(_ROOT, "src")):
+    if _p not in sys.path:
+        sys.path.insert(0, _p)
+
+from typing import Callable                                         # noqa: E402
+
+from mission.runtime import sdk_compat                             # noqa: E402
 
 
 def hover_once(drone, *, height_cm: int = 100, hover_s: float = 5.0, rate_hz: int = 20,

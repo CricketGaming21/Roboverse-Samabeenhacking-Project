@@ -21,10 +21,18 @@ Exit code 0 iff every checked drone PASSes.
 
 from __future__ import annotations
 
-from dataclasses import dataclass, field
-from typing import Any, Callable, List, Optional, Tuple
+import os
+import sys
 
-from mission.runtime import sdk_compat
+_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+for _p in (_ROOT, os.path.join(_ROOT, "src")):
+    if _p not in sys.path:
+        sys.path.insert(0, _p)
+
+from dataclasses import dataclass, field                            # noqa: E402
+from typing import Any, Callable, List, Optional, Tuple             # noqa: E402
+
+from mission.runtime import sdk_compat                              # noqa: E402
 
 
 @dataclass

@@ -13,10 +13,18 @@ Public API only; real-only init via sdk_compat (telemetry-only, never arms).
 
 from __future__ import annotations
 
-from typing import Callable, Dict
+import os
+import sys
 
-from mission.runtime import sdk_compat
-from scripts.hardware_check import check_drone
+_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))   # repo root
+for _p in (_ROOT, os.path.join(_ROOT, "src")):                       # runnable as `python scripts/x.py`
+    if _p not in sys.path:
+        sys.path.insert(0, _p)
+
+from typing import Callable, Dict                                    # noqa: E402
+
+from mission.runtime import sdk_compat                              # noqa: E402
+from scripts.hardware_check import check_drone                      # noqa: E402
 
 
 def connect_and_telemetry(ips: Dict[int, str], *, uwb, make_api: Callable,
