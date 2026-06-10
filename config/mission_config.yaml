@@ -36,12 +36,10 @@ planner:
   separation_min_m: 0.8      # inter-drone lateral separation (horizontal deconfliction)
 
 aruco:
-  # [RECONCILED vs sim] dict/pads/ids/speed/camera all match finals/sim sim_config.yaml.
-  dictionary: DICT_6X6_250   # [TO CONFIRM on sample pad]
+  # [SYNC-WITH-SIM] sim profile. Detection is an ALLOW-LIST: bank only ids in rover_ids.
+  dictionary: DICT_6X6_250   # sim markers
   min_marker_px: 40          # apparent side to count a read
-  pad_ids: [10, 11, 12, 13, 14]   # [SYNC-WITH-SIM] pads (validity announced on the day)
-  # rover ids are NOT enumerated here on purpose: opponent rovers carry DIFFERENT ids.
-  # Rule: any decoded marker whose id is NOT in pad_ids is a rover.
+  rover_ids: [20, 21, 22, 23, 24, 30, 31]   # convoy 20–24 (+ evasive 30,31 for mixed mode)
 
 camera:
   width: 640

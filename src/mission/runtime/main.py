@@ -357,7 +357,9 @@ def _run(cfg, *, real, sleep, cycles, dwell, rover_ids, use_dola=False, log=prin
                       all_rover_ids=rover_ids, intrinsics=intr, sleep=sleep,
                       phase2_kwargs={"budget_cycles": cycles, "dwell_s": dwell,
                                      "mopup_extra_cycles": 1, "gimbal_deg": 90,
-                                     "graph": graph})    # route Phase-2 hops around crates
+                                     "graph": graph,      # route Phase-2 hops around crates
+                                     "rover_ids": rover_ids,            # allow-list (config)
+                                     "dictionary": cfg.aruco.dictionary})
     land_xy = {}
     try:
         landings = mission.run_phase1(parallel=True)
@@ -399,8 +401,9 @@ def main(argv=None) -> int:
     args = ap.parse_args(argv)
 
     cfg = load_real_config() if args.real else load_config()
-    rover_ids = [int(x) for x in os.environ.get(
-        "HULA_ROVER_IDS", "20,21,22,23,24").split(",")]
+    env_ids = os.environ.get("HULA_ROVER_IDS")           # config-driven; env override optional
+    rover_ids = ([int(x) for x in env_ids.split(",")] if env_ids
+                 else list(cfg.aruco.rover_ids))
     cycles = int(os.environ.get("HULA_PHASE2_CYCLES", "3"))
     dwell = float(os.environ.get("HULA_PHASE2_DWELL_S", "1.0"))
     use_dola = bool(os.environ.get("HULA_USE_DOLA"))

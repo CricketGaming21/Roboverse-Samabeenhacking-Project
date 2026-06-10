@@ -65,9 +65,9 @@ class PlannerCfg(_Base):
 
 
 class ArucoCfg(_Base):
-    dictionary: str
+    dictionary: str             # sim DICT_6X6_250 / real DICT_7X7_1000 (detector is dict-agnostic)
     min_marker_px: int
-    pad_ids: List[int]
+    rover_ids: List[int]        # ALLOW-LIST: bank only these ids (no pad deny-list — a real rover is id 11)
 
 
 class CameraCfg(_Base):

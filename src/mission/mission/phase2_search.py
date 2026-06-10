@@ -196,12 +196,16 @@ def phase2_search(drone, uwb, tag_id: int, vantages: Sequence[dict], stream, sta
                   lock_timeout_s: float = 6.0, center_tol_px: int = 45,
                   min_marker_px: int = 40, kp_px: float = 0.02, hold_frames: int = 5,
                   intrinsics: Optional[CameraIntrinsics] = None, alt_m: float = 1.1,
+                  rover_ids: Optional[Sequence[int]] = None,
+                  dictionary: str = "DICT_6X6_250",
                   graph=None, sleep=time.sleep, clock: Callable[[], float] = time.time,
                   on_step=None, **loop_kwargs) -> set:
     """Patrol vantages, lock-and-tag distinct rover ids within `bubble` (mop-up drops the
-    gate near the end). Returns the set of ids THIS drone banked."""
+    gate near the end). Banks ONLY ids in the `rover_ids` allow-list (defaults to `all_ids`).
+    Returns the set of ids THIS drone banked."""
     banked: set = set()
     flags = {"mopup": False}
+    allow = set(rover_ids if rover_ids is not None else (all_ids or []))
 
     def done() -> bool:
         return all_ids is not None and len(set(all_ids) - state.tagged()) == 0
@@ -213,9 +217,9 @@ def phase2_search(drone, uwb, tag_id: int, vantages: Sequence[dict], stream, sta
         if frame is None:
             return False
         cam_xy = drone_arena_xy(drone, uwb, tag_id)
-        for d in confirm_with_aruco(frame.to_rgb()):
+        for d in confirm_with_aruco(frame.to_rgb(), dictionary):
             mid = d.marker_id
-            if mid is None or not is_rover_id(mid) or state.is_tagged(mid):
+            if mid is None or not is_rover_id(mid, allow) or state.is_tagged(mid):
                 continue
             xy = _marker_xy(d.bbox, cam_xy, drone.get_orientation().yaw,
                             drone.get_altitude() / 100.0, gimbal_deg, intrinsics)
@@ -227,7 +231,7 @@ def phase2_search(drone, uwb, tag_id: int, vantages: Sequence[dict], stream, sta
             # commitment: a started lock runs to completion (bounded)
             if lock_and_tag(drone, stream, d, state, hold_frames=hold_frames,
                             center_tol_px=center_tol_px, min_marker_px=min_marker_px,
-                            lock_timeout_s=lock_timeout_s,
+                            lock_timeout_s=lock_timeout_s, dictionary=dictionary,
                             rate_hz=rate_hz, kp_px=kp_px, gimbal_deg=gimbal_deg,
                             intrinsics=intrinsics, uwb=uwb, tag_id=tag_id, alt_m=alt_m,
                             sleep=sleep, clock=clock, on_step=on_step):

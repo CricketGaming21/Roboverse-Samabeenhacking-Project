@@ -42,9 +42,9 @@ planner:
   separation_min_m: 0.8
 
 aruco:
-  dictionary: DICT_6X6_250
+  dictionary: DICT_7X7_1000   # real markers
   min_marker_px: 40
-  pad_ids: [11, 45, 51, 67, 101]   # the real pad ids (pads carry NO markers per R1 — landing is UWB-only)
+  rover_ids: [11, 45, 51, 67, 101]   # the real rover marker ids (pads carry NO markers per R1)
 
 camera:
   width: 640

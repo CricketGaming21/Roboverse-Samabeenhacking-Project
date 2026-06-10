@@ -62,7 +62,7 @@ def test_load_default_config():
     assert cfg.speed.max_mps == 0.5
     assert cfg.speed.cruise_alt_m == pytest.approx(1.10)
     assert len(cfg.pads) == 5
-    assert cfg.aruco.pad_ids == [10, 11, 12, 13, 14]
+    assert cfg.aruco.rover_ids == [20, 21, 22, 23, 24, 30, 31]   # allow-list (sim + mixed)
     assert len(cfg.valid_pads()) == 4
     assert cfg.uwb.tag_ids == [0, 1, 2]
 
