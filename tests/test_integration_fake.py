@@ -202,6 +202,7 @@ def test_discovery_uses_dola_when_available(world):
 # real-sim integration (implemented; excluded from the gate)
 # --------------------------------------------------------------------------- #
 @pytest.mark.integration
+@pytest.mark.timeout(900)        # a real-time episode runs minutes, not the 60 s unit cap
 def test_full_run_against_real_sim():
     """Short end-to-end episode against the REAL sim (supervised). Run with:
 
