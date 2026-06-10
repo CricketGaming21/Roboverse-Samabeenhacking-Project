@@ -31,6 +31,10 @@ class FakeUWBParserThread(threading.Thread):
         super().__init__(daemon=True)
         self.serial_port = serial_port or "/dev/ttySIM_UWB"
         self.baud_rate = baud_rate
+        # Per-cage origin: the latest real UWBParserThread ADDS it to the reported position.
+        # Default 0.0 → identical to before; non-zero shifts the fix into the cage frame.
+        self.origin_x = float(x_origin)
+        self.origin_y = float(y_origin)
         self._world = world if world is not None else get_active_world()
         self.noise_std_m = float(noise_std_m)
         self.dropout_prob = float(dropout_prob)
@@ -66,4 +70,5 @@ class FakeUWBParserThread(threading.Thread):
             return (None, None, None)
         nx, ny = (self._rng.normal(0.0, self.noise_std_m, 2)
                   if self.noise_std_m > 0.0 else (0.0, 0.0))
-        return (truth[0] + float(nx), truth[1] + float(ny), self._world.clock)
+        return (truth[0] + float(nx) + self.origin_x,
+                truth[1] + float(ny) + self.origin_y, self._world.clock)

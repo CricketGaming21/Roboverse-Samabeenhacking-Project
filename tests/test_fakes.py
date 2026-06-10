@@ -194,6 +194,16 @@ def test_uwb_returns_truth_noiseless(world, uwb):
     assert t == world.clock
 
 
+def test_uwb_origin_is_applied(world):
+    fpx.FakeDroneAPI(world).connect(world.ip_map[0])
+    truth = world.truth_xy(0)
+    plain = fuwb.FakeUWBParserThread(world=world)                 # origin 0 → truth
+    assert plain.get_tag_position(0)[:2] == pytest.approx(truth)
+    shifted = fuwb.FakeUWBParserThread(x_origin=5.5, y_origin=5.5, world=world)
+    x, y, _ = shifted.get_tag_position(0)                          # cage origin added
+    assert (x, y) == pytest.approx((truth[0] + 5.5, truth[1] + 5.5))
+
+
 def test_uwb_unmapped_and_unseen_return_none(world):
     u = fuwb.FakeUWBParserThread(world=world)
     fpx.FakeDroneAPI(world).connect(world.ip_map[0])
