@@ -203,7 +203,44 @@ def test_discovery_uses_dola_when_available(world):
 # --------------------------------------------------------------------------- #
 @pytest.mark.integration
 def test_full_run_against_real_sim():
-    """Run the same Mission against the REAL sim pyhulax (supervised). Needs the sim on
-    the path + RUN_INTEGRATION=1; excluded from the overnight gate."""
-    import pyhulax
-    assert hasattr(pyhulax, "DroneAPI")                 # placeholder — wire to the live sim
+    """Short end-to-end episode against the REAL sim (supervised). Run with:
+
+        RUN_INTEGRATION=1 PYTHONPATH=<...>/sim \\
+        HULA_SIM_CONFIG=<...>/sim/sim_config.yaml \\
+        pytest tests/test_integration_fake.py -m integration -s
+
+    RUN_INTEGRATION=1 makes conftest skip the fakes so `import pyhulax` is the sim.
+    Asserts 3 in-hoop landings via the sim's OWN LandingScorer (authoritative); reports
+    Stage-2 banks. `simcore` is read here (a TEST) — mission code never imports it."""
+    import time
+
+    from mission.config import load_config
+    from mission.runtime.main import Mission, build_live_mission
+
+    cfg = load_config()
+    drones, streams, uwb, pad_coords, footprints, intr, plan, starts = \
+        build_live_mission(cfg, sleep=time.sleep)
+    mission = Mission(cfg, plan, drones=drones, uwb=uwb, streams=streams,
+                      pad_coords=pad_coords, footprints=footprints,
+                      all_rover_ids=[20, 21, 22, 23, 24], intrinsics=intr,
+                      sleep=time.sleep, phase2_kwargs={"budget_cycles": 1, "dwell_s": 0.8})
+    try:
+        mission.run_phase1(parallel=True)
+        time.sleep(4.0)                                  # let on_all_landed fire + convoy enter
+        mission.run_phase2(parallel=True)
+
+        from simcore.registry import get_registry        # simcore: TESTS may read it
+        reg = get_registry()
+        landings = reg.landing_scorer.score()
+        banked = sorted(reg.referee.banked_ids()) if reg.referee is not None else []
+        print(f"\n[integration] sim LandingScorer={landings}/3 in-hoop ; "
+              f"referee banked={banked} ; mission banked={sorted(mission.state.tagged())}")
+        assert landings == 3                             # all three land in the hoop (0.30 m)
+    finally:
+        mission.shutdown()
+        try:
+            uwb.stop()
+        except Exception:
+            pass
+        from simcore.registry import shutdown_registry
+        shutdown_registry()
