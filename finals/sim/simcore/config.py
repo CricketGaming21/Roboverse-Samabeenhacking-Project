@@ -266,7 +266,7 @@ class CameraConfig:
 class ArucoConfig:
     dictionary: str = "DICT_7X7_1000"   # real-event dictionary (ids 0-999)
     pad_marker_size_m: float = 0.30      # legacy footprint size (pads carry NO marker)
-    rover_marker_size_m: float = 0.15
+    rover_marker_size_m: float = 0.20    # ArUco marker side on each rover's gimbal
 
 
 @dataclass
