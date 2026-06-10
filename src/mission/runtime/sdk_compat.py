@@ -22,9 +22,10 @@ def _try(drone, name: str, *args) -> bool:
 
 
 def prepare_manual_control(drone, velocity_level: Optional[int] = None) -> None:
-    """Real-SDK init before manual control: app mode, first heartbeat, velocity level.
-    No-op on the sim (these attrs are absent); real on hardware."""
+    """Real-SDK init before manual control: app mode, arm, first heartbeat, velocity
+    level. No-op on the sim (these attrs are ALL absent); real on hardware."""
     _try(drone, "set_app_mode", 1)
+    _try(drone, "arm")
     _try(drone, "send_app_heartbeat")
     if velocity_level is not None:
         _try(drone, "set_velocity_level", velocity_level)
@@ -41,6 +42,8 @@ def enable_battery_failsafe(drone, *args) -> bool:
 
 
 def release(drone) -> None:
-    """Stop manual control + disconnect if those exist (real SDK); no-op on the sim."""
+    """Stop manual control, disarm + disconnect if those exist (real SDK); no-op on the
+    sim. Landing is done via the public `land()` BEFORE this — release is teardown only."""
     _try(drone, "stop_manual_control")
+    _try(drone, "disarm")
     _try(drone, "disconnect")

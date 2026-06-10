@@ -108,11 +108,21 @@ def test_prepare_runs_real_path_on_real_like(make_drone):
     d = make_drone(0, real_like=True)
     sdk_compat.prepare_manual_control(d, velocity_level=100)
     assert "set_app_mode:1" in d.real_calls
+    assert "arm" in d.real_calls
     assert "send_app_heartbeat" in d.real_calls
     assert "set_velocity_level:100" in d.real_calls
     sdk_compat.release(d)
     assert "stop_manual_control" in d.real_calls
+    assert "disarm" in d.real_calls
     assert "disconnect" in d.real_calls
+
+
+def test_sim_fake_lacks_all_realonly_methods(drone):
+    # the sim DroneAPI has NONE of these → the shim's hasattr-guards are mandatory
+    for name in ("set_app_mode", "send_app_heartbeat", "set_velocity_level",
+                 "stop_manual_control", "arm", "disarm", "disconnect",
+                 "enable_battery_failsafe"):
+        assert not hasattr(drone, name)
 
 
 # --------------------------------------------------------------------------- #
