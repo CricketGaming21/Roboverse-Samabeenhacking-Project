@@ -21,6 +21,7 @@ import numpy as np
 
 from mission.control.uwb_loop import fly_to_uwb
 from mission.perception.aruco import confirm_with_aruco, is_rover_id
+from mission.perception.detector import frame_bgr
 from mission.planner.geometry import Rect
 from mission.planner.projection import CameraIntrinsics, pixel_to_arena
 from mission.world.taskboard import Track
@@ -108,8 +109,8 @@ def lock_and_tag(drone, stream, detection, state, *, hold_frames: int = 5,
             drone.send_manual_control(0.0, 0.0, up, 0.0)
             sleep(dt)
             continue
-        rgb = frame.to_rgb()
-        match = next((d for d in confirm_with_aruco(rgb, dictionary)
+        bgr = frame_bgr(frame)
+        match = next((d for d in confirm_with_aruco(bgr, dictionary)
                       if d.marker_id == target_id), None)
         if match is None:
             held = 0
@@ -121,7 +122,7 @@ def lock_and_tag(drone, stream, detection, state, *, hold_frames: int = 5,
         # Bank on the SAME gate the referee scores on: marker big enough AND fully in
         # frame, held `hold_frames` frames — NOT tight centering (a moving rover is rarely
         # dead-centre; the camera only needs to hold it in view).
-        h_px, w_px = rgb.shape[0], rgb.shape[1]
+        h_px, w_px = bgr.shape[0], bgr.shape[1]
         side = max(bw, bh)
         in_frame = (bx >= frame_margin_px and by >= frame_margin_px
                     and bx + bw <= w_px - 1 - frame_margin_px
@@ -132,7 +133,7 @@ def lock_and_tag(drone, stream, detection, state, *, hold_frames: int = 5,
                 cam_xy = drone_arena_xy(drone, uwb, tag_id)
                 xy = _marker_xy(match.bbox, cam_xy, drone.get_orientation().yaw,
                                 drone.get_altitude() / 100.0, gimbal_deg, intr)
-                state.bank(target_id, rgb, xy, clock())
+                state.bank(target_id, bgr, xy, clock())     # BGR evidence (imwrite-ready)
                 drone.send_manual_control(0.0, 0.0, up, 0.0)
                 return True
         else:
@@ -217,7 +218,7 @@ def phase2_search(drone, uwb, tag_id: int, vantages: Sequence[dict], stream, sta
         if frame is None:
             return False
         cam_xy = drone_arena_xy(drone, uwb, tag_id)
-        for d in confirm_with_aruco(frame.to_rgb(), dictionary):
+        for d in confirm_with_aruco(frame_bgr(frame), dictionary):
             mid = d.marker_id
             if mid is None or not is_rover_id(mid, allow) or state.is_tagged(mid):
                 continue

@@ -23,6 +23,7 @@ for _p in (_ROOT, os.path.join(_ROOT, "src")):
 from typing import Callable, List, Tuple                            # noqa: E402
 
 from mission.perception.aruco import confirm_with_aruco            # noqa: E402
+from mission.perception.detector import frame_bgr                  # noqa: E402
 
 
 def scan_frames(drone, stream, *, frames: int = 30, dictionary: str = "DICT_6X6_250",
@@ -38,7 +39,7 @@ def scan_frames(drone, stream, *, frames: int = 30, dictionary: str = "DICT_6X6_
             log(f"  frame {i:02d}: (no frame yet)")
             sleep(0.1)
             continue
-        dets = confirm_with_aruco(frame.to_rgb(), dictionary)
+        dets = confirm_with_aruco(frame_bgr(frame), dictionary)
         if not dets:
             log(f"  frame {i:02d}: no marker")
         for d in dets:

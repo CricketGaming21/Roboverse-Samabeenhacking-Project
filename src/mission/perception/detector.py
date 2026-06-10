@@ -38,7 +38,7 @@ class Detection:
 # --------------------------------------------------------------------------- #
 class RoverDetector(abc.ABC):
     @abc.abstractmethod
-    def detect(self, frame_rgb: np.ndarray) -> List[Detection]:
+    def detect(self, image_bgr: np.ndarray) -> List[Detection]:
         ...
 
 
@@ -50,8 +50,8 @@ class PlaceholderRoverDetector(RoverDetector):
         self._conf = float(conf)
         self._box_frac = float(box_frac)
 
-    def detect(self, frame_rgb: np.ndarray) -> List[Detection]:
-        h, w = frame_rgb.shape[:2]
+    def detect(self, image_bgr: np.ndarray) -> List[Detection]:
+        h, w = image_bgr.shape[:2]
         bw, bh = int(w * self._box_frac), int(h * self._box_frac)
         return [Detection(bbox=((w - bw) // 2, (h - bh) // 2, bw, bh),
                           conf=self._conf, marker_id=None, source="yolo")]
@@ -73,8 +73,8 @@ class ClassicalRoverDetector(RoverDetector):
         self.motion_thresh = int(motion_thresh)
         self._prev_gray: Optional[np.ndarray] = None
 
-    def detect(self, frame_rgb: np.ndarray) -> List[Detection]:
-        gray = cv2.cvtColor(frame_rgb, cv2.COLOR_RGB2GRAY)
+    def detect(self, image_bgr: np.ndarray) -> List[Detection]:
+        gray = cv2.cvtColor(image_bgr, cv2.COLOR_BGR2GRAY)
         # a marked target is much brighter (white pad) or darker (marker) than the floor
         mask = ((gray >= self.bright_thresh) | (gray <= self.dark_thresh)).astype(np.uint8) * 255
         if self.use_motion and self._prev_gray is not None:
@@ -86,7 +86,7 @@ class ClassicalRoverDetector(RoverDetector):
         mask = cv2.morphologyEx(mask, cv2.MORPH_CLOSE, k)
         contours, _ = cv2.findContours(mask, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
         out: List[Detection] = []
-        frame_area = float(frame_rgb.shape[0] * frame_rgb.shape[1])
+        frame_area = float(image_bgr.shape[0] * image_bgr.shape[1])
         for c in contours:
             x, y, w, h = cv2.boundingRect(c)
             area = w * h
@@ -113,14 +113,24 @@ class ScanResult:
         return [d.marker_id for d in self.confirmed if d.marker_id is not None]
 
 
+def frame_bgr(frame) -> np.ndarray:
+    """One BGR ndarray for ALL cv2/ArUco/evidence use. Real SDK frames expose a native
+    BGR `.image`; the sim's expose `.to_rgb()` (convert). Routing everything through this is
+    what keeps real proof-snapshots from coming out colour-swapped."""
+    img = getattr(frame, "image", None)
+    if img is not None:
+        return img                                          # real SDK: already BGR
+    return cv2.cvtColor(frame.to_rgb(), cv2.COLOR_RGB2BGR)   # sim: RGB -> BGR
+
+
 def grab_frame(stream, timeout_s: float = 2.0,
                sleep: Callable[[float], None] = time.sleep) -> Optional[np.ndarray]:
-    """Pull the latest RGB frame from a public pyhulax VideoStream."""
+    """Pull the latest frame from a public pyhulax VideoStream as a BGR ndarray."""
     deadline = time.time() + timeout_s
     while True:
         frame = stream.latest_frame
         if frame is not None:
-            return frame.to_rgb()
+            return frame_bgr(frame)
         if time.time() >= deadline:
             return None
         sleep(0.02)

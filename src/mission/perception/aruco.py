@@ -28,12 +28,12 @@ def _detector(dictionary: str):
     return cv2.aruco.ArucoDetector(d, cv2.aruco.DetectorParameters())
 
 
-def confirm_with_aruco(frame_rgb: np.ndarray, dictionary: str = ARUCO_DICT_DEFAULT,
+def confirm_with_aruco(image_bgr: np.ndarray, dictionary: str = ARUCO_DICT_DEFAULT,
                        min_marker_px: int = 0) -> List[Detection]:
-    """Decode every visible marker → a confirmed `Detection` (id + bbox) per marker.
-    A marker whose larger pixel side is below `min_marker_px` is dropped (too far to
-    trust)."""
-    gray = cv2.cvtColor(frame_rgb, cv2.COLOR_RGB2GRAY)
+    """Decode every visible marker → a confirmed `Detection` (id + bbox) per marker, given a
+    BGR ndarray (use `detector.frame_bgr` on the frame). A marker whose larger pixel side is
+    below `min_marker_px` is dropped (too far to trust)."""
+    gray = cv2.cvtColor(image_bgr, cv2.COLOR_BGR2GRAY)
     corners, ids, _ = _detector(dictionary).detectMarkers(gray)
     out: List[Detection] = []
     if ids is None:
