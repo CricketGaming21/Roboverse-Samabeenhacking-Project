@@ -19,6 +19,34 @@
 
 **ALL PHASES GREEN — full suite: 174 passed, 1 skipped (the real-sim `integration` test).**
 
+## Real-hardware enablement (UWB cage) — sim path kept working, fake gate green (203 passed)
+Made the mission flyable on real HULA hardware while leaving the sim path untouched (it still
+loads `mission_config.yaml` + the sim `pyhulax`). TDD, one commit per layer:
+- **`config/mission_real.yaml`** (loaded by `--real`; never edits the sim config): the 5 real pads
+  (`{id:{x,y}}` → internal list), `designated_pads:[11,51,101]`, `uwb.origin_x|y` (per-cage origin),
+  `discovery.use_dola:true`, **tag-only** `drones`, safety (≤0.5 m/s, 1.1 m, hoop 0.20 m, battery RTL,
+  hold-on-dropout). `load_real_config()` translates it; schema extensions are backward-compatible
+  (uwb origin defaults, optional drone ip/start, optional `discovery`). Open-cage `arena_real.yaml`.
+- **UWB cage origin**: `UWBParserThread(x_origin, y_origin)` started from config; the fake applies it
+  (origin 0 unchanged) so it's tested.
+- **Discovery** `resolve_ordered()` — Dola-discover then map drones to the configured tag_ids **in
+  order** (deck slide-6), logged; config fallback when Dola is stubbed/absent.
+- **`--real` entrypoint** (`python -m mission.runtime.main --real`): Dola-ordered discover+connect,
+  UWB cage origin, **starts read from UWB**, assign the 3 designated pads (nearest, no crossing), fly
+  ≤0.5 m/s at ~1.1 m UWB-only landing, basic Phase-2; **finally lands every drone**, Ctrl-C →
+  abort-and-land, per-drone status lines (connected / UWB / target pad / state). Config-driven arena path.
+- **Staged bring-up scripts** (motion gated behind `--i-have-clear-space`, land-in-finally, public-API
+  only): `connect_check.py` (read-only telemetry + live UWB; validates the cage origin & ip↔tag),
+  `hover_test.py` (first arming), `camera_check.py` (live ArUco on real frames), `yaw_calibrate.py`
+  (forward-nudge → set `frame.yaw_offset_deg`/`invert_*`, no code change). Each runs as
+  `python scripts/<x>.py` (self-bootstraps `src` onto the path).
+- **Landing robustness**: the success gate now averages independent UWB samples (a single 5 cm read
+  flipped pass/fail even when centred); the report counts from `worker.landed_ok`.
+- **Verified**: full fake suite 203 passed; `connect_check`/`--real` wiring tested on the fakes; the
+  SIM run (no `--real`) still lands **3/3 SCORED** (sim LandingScorer, ~2–4 cm). The live `--real` path
+  needs the real cage (the sim's `Dola` is stubbed + the real config has no IPs), so it's fake-verified
+  here and climbs the `docs/SIM_VS_REAL.md` ladder on the day.
+
 ## Refinements (docs/REFINEMENTS.md) — one at a time, human review between each
 ### R1 — Phase-1 ArUco removal ✅ (committed `809bd79`)
 Roster check: live sim `rovers.motion: convoy` (baseline). Phase 1 now lands **purely on UWB** — all
