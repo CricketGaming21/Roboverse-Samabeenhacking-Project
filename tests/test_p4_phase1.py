@@ -88,6 +88,22 @@ def test_land_in_hoop_centres_and_lands_uwb_only(monkeypatch):
     fpx.set_active_world(None)
 
 
+def test_land_success_robust_under_uwb_noise():
+    # A single noisy UWB read could flip pass/fail; the averaged final gate must not.
+    w = fpx.FakeWorld(crates=[])
+    w.pads = [Marker(10, 8.5, 3.0)]
+    fpx.set_active_world(w)
+    d = fpx.FakeDroneAPI(w)
+    d.connect(w.ip_map[0])
+    d.n, d.e = 8.4, 2.9
+    d.takeoff(110)
+    noisy = fuwb.FakeUWBParserThread(world=w, noise_std_m=0.05, seed=1)
+    ok = land_in_hoop(d, noisy, 0, (8.5, 3.0), hoop_tol_m=0.15, footprints=[],
+                      sleep=NOSLEEP)
+    assert ok is True                                       # centred → lands despite 5 cm noise
+    fpx.set_active_world(None)
+
+
 def test_land_aborts_if_pad_over_footprint():
     w = fpx.FakeWorld(crates=[])
     fpx.set_active_world(w)

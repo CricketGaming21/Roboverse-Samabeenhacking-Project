@@ -309,10 +309,9 @@ def _report(cfg, mission, pad_coords, plan, land_xy, footprints, rover_ids):
             lines.append(f"  drone {tag}: pad {pad_id}  UWB=DROPOUT  state={w.state.value}")
             continue
         err = math.hypot(xy[0] - px, xy[1] - py)
-        in_hoop = err <= tol
-        landed += int(in_hoop)
-        lines.append(f"  drone {tag}: pad {pad_id} phase1_land_err={err * 100:5.1f}cm "
-                     f"{'IN-HOOP' if in_hoop else 'OUT'}  final_state={w.state.value}  "
+        landed += int(w.landed_ok)                            # robust averaged determination
+        lines.append(f"  drone {tag}: pad {pad_id} phase1_land_err≈{err * 100:5.1f}cm "
+                     f"{'IN-HOOP' if w.landed_ok else 'OUT'}  final_state={w.state.value}  "
                      f"err={w.error}")
     tagged = sorted(mission.state.tagged())
     distinct = sorted(set(tagged) & set(rover_ids))

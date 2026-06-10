@@ -29,29 +29,38 @@ Because the sim is a **SUBSET** of the real SDK, every real-only init/teardown c
 guards — no-ops on the sim, real on hardware. **Never call them directly.** The read-only bring-up
 init uses `sdk_compat.prepare_telemetry` (app-mode + heartbeat, **never arms**).
 
-## The bring-up ladder (climb in order — each rung GATES the next)
-- [ ] **0 · Env swap.** Real SDK importable (above); `python -c "import pyhulax; print(pyhulax.__file__)"`
-      points at the **real** package, not `…/sim/pyhulax`. UWB serial detected.
-- [ ] **1 · READ-ONLY hardware check — no motion.** `python scripts/hardware_check.py`
-      (or `--drone <ip>` one at a time). **Gate: every drone PASS** — connected, telemetry non-null
-      (battery/position/orientation/altitude/obstacles), and UWB returns real coords for its tag.
-      Nothing takes off or arms. Fix wiring/UWB/IP-map before climbing.
-- [ ] **2 · Frame calibration (first powered motion — caged/low, marshal-approved).** Through
-      `sdk_compat.prepare_manual_control`, send a small `+forward` then `+right` stick and watch UWB.
-      Set **`frame.yaw_offset_deg`** so body-forward = +North, and **`frame.invert_forward` /
-      `invert_right`** so the sticks aren't mirrored. **Gate: +forward → +North, +right → +East in UWB.**
-- [ ] **3 · Single-drone `fly_to_uwb`.** Fly one drone to a near UWB waypoint at ~**1.1 m**.
-      **Gate:** converges within `speed.arrive_tol_m`, **never > 0.5 m/s**, holds position on a UWB
-      dropout, no `+up` to clear anything. Tune `speed.kp_xy`/`kp_alt` gently here.
-- [ ] **4 · Single-drone Phase-1 land (UWB-only — R1).** Land one drone on a sample pad by UWB alone
-      (no ArUco). **Gate: lands within `landing.hoop_tol_m`** of the pad centre; set `hoop_tol_m` from
-      the measured hoop radius minus a UWB-jitter margin.
-- [ ] **5 · Single-drone Phase-2 lock-on + tag.** Over a sample rover/marker: confirm `aruco.dictionary`
-      (`DICT_6X6_250`) and `camera.h_fov_deg`; the drone banks a **distinct id** (≥40 px, in-frame, 5
-      frames), **releases**, and routes **laterally** (no overfly). **Gate: one clean bank + release.**
-- [ ] **6 · Full 3-drone mission.** `python -m mission.runtime.main` (Phase 1 → Phase 2, `parallel`).
-      **Gate: 3/3 land in-hoop, distinct rover ids tagged, `logs/compliance` empty (no over-crate /
-      altitude-cap), shutdown lands every drone.**
+## The real-hardware profile
+`config/mission_real.yaml` (loaded by `--real`; **never edit `mission_config.yaml`**) bakes the real
+pads, sets `discovery.use_dola: true`, lists `drones` as **tag-only** (IPs Dola-discovered; starts read
+from UWB at runtime), and carries the safety values (≤0.5 m/s, ~1.1 m cruise, `hoop_tol_m: 0.20`, battery
+RTL, hold-on-dropout). **Set `uwb.origin_x|origin_y` per assigned cage** (Cage1 0/0, Cage2 5.5/0, Cage3
+5.5/5.5) — the real `UWBParserThread(x_origin, y_origin)` applies it so UWB and the pad coords share one
+frame. The frame transform stays parametric via `frame.yaw_offset_deg`/`invert_*` (rung 2 — no code change).
+
+## The bring-up ladder (climb in order — each rung GATES the next; all run with the real env)
+- [ ] **0 · Env swap.** Real SDK importable; `python -c "import pyhulax; print(pyhulax.__file__)"` points
+      at the **real** package, not `…/sim/pyhulax`. UWB serial detected. Scripts run as
+      `python scripts/<x>.py` (they bootstrap `src` onto the path themselves).
+- [ ] **1 · READ-ONLY connect + telemetry + live UWB — no motion.**
+      `python scripts/connect_check.py --real` (or `--ip <ip>` for one; `scripts/hardware_check.py` is the
+      PASS/FAIL variant). **Gate:** every drone PASS, ip↔tag pairing as logged, and the **live UWB matches
+      where each drone physically sits** (this validates `uwb.origin_*`). Nothing arms.
+- [ ] **2 · First ARMING — hover (clear space, no UWB needed).**
+      `python scripts/hover_test.py --ip <ip> --i-have-clear-space` → takeoff 1.0 m, hover 5 s, land.
+      **Gate:** arms, holds, lands cleanly (works at home).
+- [ ] **3 · Camera / marker check (read-only).** `python scripts/camera_check.py --ip <ip>` → live
+      `cv2.aruco` on the real feed. **Gate:** the 20 cm markers decode and read ≥40 px at the search range.
+- [ ] **4 · Frame calibration (cage — first UWB motion).**
+      `python scripts/yaw_calibrate.py --ip <ip> --i-have-clear-space` → nudges +forward, prints the UWB
+      delta. Set **`frame.yaw_offset_deg` / `invert_forward` / `invert_right`** so **+forward → +North,
+      +right → +East**. (Gentle stick; SDK clamps ≤0.5 m/s; lands in `finally`.)
+- [ ] **5 · Single-drone UWB land + lock-on.** A `fly_to_uwb` to a pad at ~1.1 m, land **UWB-only**
+      (R1, no ArUco) within `landing.hoop_tol_m`; then a Phase-2 lock that banks a **distinct id** and
+      **releases**, routing **laterally** (no overfly). Tune `speed.kp_xy`/`kp_alt` gently.
+- [ ] **6 · Full 3-drone mission.** `python -m mission.runtime.main --real` — Dola-discover + connect,
+      UWB with the cage origin, assign the 3 `designated_pads` (nearest, no crossing), fly each ≤0.5 m/s
+      at ~1.1 m, land in-hoop, then basic Phase-2. **Gate: 3/3 land in-hoop, shutdown lands every drone**
+      (`finally`), Ctrl-C → abort-and-land. Per-drone status: connected / UWB pos / target pad / state.
 
 ## On-the-day calibration values (edit `config/mission_config.yaml` only)
 Feed these as you climb the ladder (rung in brackets):

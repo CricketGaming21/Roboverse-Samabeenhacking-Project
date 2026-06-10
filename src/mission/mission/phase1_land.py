@@ -133,7 +133,26 @@ def land_in_hoop(drone, uwb, tag_id: int, pad_xy: Point, hoop_tol_m: float, *,
         sleep(dt)
 
     drone.land()
-    x, y, _t = uwb.get_tag_position(tag_id)
-    if x is None or y is None:
+    # Landing-success gate over an AVERAGE of independent UWB samples: a single 5 cm-noise
+    # read can flip pass/fail even when centred. (Reads are spaced by the UWB refresh so they
+    # are independent; the controller above used single reads, which is fine for control.)
+    fx, fy = _avg_uwb(uwb, tag_id, sleep=sleep)
+    if fx is None:
         return False
-    return math.hypot(pad_xy[0] - x, pad_xy[1] - y) <= hoop_tol_m
+    return math.hypot(pad_xy[0] - fx, pad_xy[1] - fy) <= hoop_tol_m
+
+
+def _avg_uwb(uwb, tag_id, *, samples: int = 5, delay: float = 0.1, sleep=time.sleep):
+    """Average `samples` independent UWB fixes (spaced by `delay`, the UWB refresh). Returns
+    (None, None) if no fix appears."""
+    xs, ys = [], []
+    for i in range(max(1, samples)):
+        x, y, _t = uwb.get_tag_position(tag_id)
+        if x is not None and y is not None:
+            xs.append(x)
+            ys.append(y)
+        if i < samples - 1:
+            sleep(delay)
+    if not xs:
+        return (None, None)
+    return (sum(xs) / len(xs), sum(ys) / len(ys))
