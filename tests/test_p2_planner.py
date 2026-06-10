@@ -127,7 +127,8 @@ def test_plan_on_real_arena_truth():
     bounds = Rect(0, 0, arena.length_m, arena.width_m)
     inflated = inflate(arena.footprint_tuples(), 0.4)
     g = build_graph(inflated, bounds)
-    path = plan_path((0.6, 1.1), (8.5, 3.0), g)
+    # drone start -> designated pad 51 (4.4, 4.4) on the overhauled sim arena
+    path = plan_path((0.6, 1.1), (4.4, 4.4), g)
     _path_is_clear(path, inflated, bounds)
 
 
