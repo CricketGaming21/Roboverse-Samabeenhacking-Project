@@ -19,6 +19,17 @@
 
 **ALL PHASES GREEN — full suite: 174 passed, 1 skipped (the real-sim `integration` test).**
 
+## Refinements (docs/REFINEMENTS.md) — one at a time, human review between each
+### R1 — Phase-1 ArUco removal ✅ (committed `809bd79`)
+Roster check: live sim `rovers.motion: convoy` (baseline). Phase 1 now lands **purely on UWB** — all
+ArUco decode/confirm removed from `land_in_hoop` + the `LAND_HOOP` path (dropped `confirm_pad`/`stream`/
+`pad_id`/`_decode_ids`/`confirm_pad_aruco`); the camera is **off in Phase 1** (stream created but
+`set_video_stream(True)` deferred to Phase-2 start in `worker.run_phase2`). Phase-2 pad-id exclusion
+(skip 10–14) **kept**. Fake gate: 174 passed, 1 skipped (new tests: Phase-1 lands with `cv2.aruco`
+monkeypatched to raise → proves UWB-only; `video_enabled` False through Phase 1, True at Phase-2 start).
+**Supervised sim verify (`/tmp/r1.mp4`, cycles=1): still 3/3 in-hoop (sim LandingScorer pads 12/11/10 @
+1–2 cm SCORED); compliance 0 violations; no UWB/connect errors.** Stopped for review before R2.
+
 ## Integration session vs the LIVE sim (~/codes/finals/sim, in-process) — `python -m mission.runtime.main`
 Ran the mission end-to-end against the real `pyhulax` + PyBullet sim (booted in-process by
 `connect()`). **Live results (authoritative sim referees): Phase 1 = 3/3 landings SCORED in-hoop
