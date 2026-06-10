@@ -208,8 +208,33 @@ def overwatch_vantages(bounds, inflated, pad_by_tag, *, gimbal_deg=90.0, dwell_s
             for tag, gp in groups.items()}
 
 
-def build_live_mission(cfg, *, sleep, use_dola=False):
-    """Wire discovery → connect → UWB → workers for a live (sim/real) run."""
+def _read_starts_from_uwb(uwb, tags, sleep, *, attempts=60, delay=0.1):
+    """Real-day drone starts come from UWB (no configured starts). Retry until each tag has
+    a fix; raise with a clear message if a tag never appears (cage/origin/tag-id problem)."""
+    starts = {}
+    for _ in range(max(1, attempts)):
+        for t in tags:
+            if t not in starts:
+                x, y, _t = uwb.get_tag_position(t)
+                if x is not None and y is not None:
+                    starts[t] = (x, y)
+        if len(starts) == len(tags):
+            break
+        sleep(delay)
+    missing = [t for t in tags if t not in starts]
+    if missing:
+        raise SystemExit(f"UWB: no fix for tag(s) {missing} after {attempts} tries — "
+                         f"check cage power / uwb.origin_x|y / tag ids")
+    return starts
+
+
+def build_live_mission(cfg, *, sleep, use_dola=False, real=False):
+    """Wire discovery → connect → UWB → workers for a live (sim/real) run.
+
+    real=True: Dola-discover IPs and map them to the configured tag_ids in order; start UWB
+    with the per-cage origin; read each drone's start from UWB (no configured starts)."""
+    from pathlib import Path
+
     import pyhulax
     from UWBParserThread import UWBParserThread
 
@@ -219,7 +244,10 @@ def build_live_mission(cfg, *, sleep, use_dola=False):
     from mission.mission.phase1_land import assign_pads
     from mission.runtime.discovery import Discovery
 
-    arena = load_arena()
+    arena_path = Path(cfg.planner.arena_truth_file)
+    if not arena_path.is_absolute():                          # resolve relative to repo root
+        arena_path = Path(__file__).resolve().parents[3] / cfg.planner.arena_truth_file
+    arena = load_arena(arena_path)
     bounds = Rect(0.0, 0.0, arena.length_m, arena.width_m)
     footprints = arena.footprint_tuples()
     inflated = inflate(footprints, cfg.planner.inflate_m)
@@ -228,8 +256,8 @@ def build_live_mission(cfg, *, sleep, use_dola=False):
     # over a crate (ToF altitude-hold over a crate climbs and breaches the altitude cap).
     vant_inflated = inflate(footprints, cfg.planner.inflate_m + 0.3)
 
-    ips = Discovery.from_config(cfg, use_dola=use_dola).resolve()    # {tag: ip}
-    starts = cfg.starts_by_tag()
+    disc = Discovery.from_config(cfg, use_dola=(cfg.use_dola() or use_dola))
+    ips = disc.resolve_ordered(log=print) if real else disc.resolve()    # {tag: ip}
 
     drones, streams = {}, {}
     for tag in sorted(ips):
@@ -238,8 +266,12 @@ def build_live_mission(cfg, *, sleep, use_dola=False):
         sdk_compat.prepare_manual_control(d, velocity_level=None)
         s = d.create_video_stream()      # created now; camera enabled at Phase-2 start (R1)
         drones[tag], streams[tag] = d, s
-    uwb = UWBParserThread()
+    uwb = UWBParserThread(x_origin=cfg.uwb.origin_x, y_origin=cfg.uwb.origin_y)
     uwb.start()
+
+    starts = cfg.starts_by_tag()                             # sim: configured starts
+    if real or len(starts) < len(drones):                   # real: read starts from UWB
+        starts = _read_starts_from_uwb(uwb, sorted(drones), sleep)
 
     designated = cfg.designated_pads()
     assignment = assign_pads(designated, {t: starts[t] for t in drones})   # {tag: PadCfg}
@@ -264,6 +296,7 @@ def _report(cfg, mission, pad_coords, plan, land_xy, footprints, rover_ids):
     DebugProbe, which mission code may not import — the @integration test cross-checks it).
     `land_xy` = {tag: (x,y)} captured from UWB right after Phase 1 (before shutdown)."""
     import math
+    tol = cfg.landing.hoop_tol_m
     lines = ["", "=" * 64, "MISSION REPORT (mission-side telemetry)", "=" * 64]
     pad_ids = plan.pad_assignment()
     landed = 0
@@ -276,7 +309,7 @@ def _report(cfg, mission, pad_coords, plan, land_xy, footprints, rover_ids):
             lines.append(f"  drone {tag}: pad {pad_id}  UWB=DROPOUT  state={w.state.value}")
             continue
         err = math.hypot(xy[0] - px, xy[1] - py)
-        in_hoop = err <= 0.30
+        in_hoop = err <= tol
         landed += int(in_hoop)
         lines.append(f"  drone {tag}: pad {pad_id} phase1_land_err={err * 100:5.1f}cm "
                      f"{'IN-HOOP' if in_hoop else 'OUT'}  final_state={w.state.value}  "
@@ -284,7 +317,7 @@ def _report(cfg, mission, pad_coords, plan, land_xy, footprints, rover_ids):
     tagged = sorted(mission.state.tagged())
     distinct = sorted(set(tagged) & set(rover_ids))
     lines.append("-" * 64)
-    lines.append(f"  LANDINGS in-hoop (0.30 m): {landed}/3")
+    lines.append(f"  LANDINGS in-hoop ({tol:.2f} m): {landed}/{len(mission.workers)}")
     lines.append(f"  STAGE-2 distinct rover ids tagged: {distinct}  "
                  f"({len(distinct)}/{len(rover_ids)})")
     lines.append(f"  all banked ids (incl. non-convoy): {tagged}")
@@ -302,40 +335,46 @@ def _report(cfg, mission, pad_coords, plan, land_xy, footprints, rover_ids):
     print("\n".join(lines), flush=True)
 
 
-def main(argv=None) -> int:
-    import os
+def _run(cfg, *, real, sleep, cycles, dwell, rover_ids, use_dola=False, log=print) -> int:
+    """Discover+connect, UWB (cage origin), Phase 1 land, Phase 2 search — landing every
+    drone in a `finally`, holding on UWB dropout, Ctrl-C → abort-and-land. Returns 0."""
     import time
 
-    from mission.config import load_config
-
-    cfg = load_config()
-    rover_ids = [int(x) for x in os.environ.get(
-        "HULA_ROVER_IDS", "20,21,22,23,24").split(",")]
-    cycles = int(os.environ.get("HULA_PHASE2_CYCLES", "3"))
-    dwell = float(os.environ.get("HULA_PHASE2_DWELL_S", "1.0"))
-    use_dola = bool(os.environ.get("HULA_USE_DOLA"))
-
+    log(f"[main] mode: {'REAL hardware' if real else 'sim'} — discovering + connecting…")
     drones, streams, uwb, pad_coords, footprints, intr, plan, starts, graph = \
-        build_live_mission(cfg, sleep=time.sleep, use_dola=use_dola)
+        build_live_mission(cfg, sleep=sleep, use_dola=use_dola, real=real)
+
+    pad_ids = plan.pad_assignment()
+    for tag in sorted(drones):                                # per-drone status line
+        x, y, _t = uwb.get_tag_position(tag)
+        pid = pad_ids[tag]
+        pad = pad_coords[pid]
+        pos = f"({x:.2f},{y:.2f})" if x is not None else "DROPOUT"
+        log(f"  drone tag {tag}: connected  UWB={pos}  -> pad {pid} "
+            f"@ ({pad[0]:.2f},{pad[1]:.2f})  state=INIT")
 
     mission = Mission(cfg, plan, drones=drones, uwb=uwb, streams=streams,
                       pad_coords=pad_coords, footprints=footprints,
-                      all_rover_ids=rover_ids, intrinsics=intr, sleep=time.sleep,
+                      all_rover_ids=rover_ids, intrinsics=intr, sleep=sleep,
                       phase2_kwargs={"budget_cycles": cycles, "dwell_s": dwell,
                                      "mopup_extra_cycles": 1, "gimbal_deg": 90,
                                      "graph": graph})    # route Phase-2 hops around crates
     land_xy = {}
     try:
-        print(f"[main] connected {sorted(drones)}; landing on pads "
-              f"{plan.pad_assignment()}", flush=True)
         landings = mission.run_phase1(parallel=True)
         land_xy = {t: uwb.get_tag_position(t)[:2] for t in drones}   # capture before relaunch
-        print(f"[main] phase 1 done: {landings}; waiting for convoy "
-              f"(on_all_landed trigger)…", flush=True)
-        time.sleep(4.0)                              # let the ambush trigger + convoy enter
+        for tag in sorted(mission.workers):
+            w = mission.workers[tag]
+            log(f"  drone tag {tag}: PHASE-1 "
+                f"{'LANDED' if landings.get(tag) else 'NOT-LANDED'}  state={w.state.value}")
+        if not real:
+            log("[main] waiting for convoy (on_all_landed trigger)…")
+            time.sleep(4.0)                          # sim scenario wait (real time)
         mission.run_phase2(parallel=True)
+    except KeyboardInterrupt:
+        log("\n[main] Ctrl-C — ABORTING: landing all drones…")
     finally:
-        mission.shutdown()
+        mission.shutdown()                           # lands every drone
         try:
             uwb.stop()
         except Exception:
@@ -344,6 +383,34 @@ def main(argv=None) -> int:
             sdk_compat.release(d)
     _report(cfg, mission, pad_coords, plan, land_xy, footprints, rover_ids)
     return 0
+
+
+def main(argv=None) -> int:
+    import argparse
+    import os
+    import time
+
+    from mission.config import load_config, load_real_config
+
+    ap = argparse.ArgumentParser(
+        description="HULA mission runner — sim by default, --real for cage hardware.")
+    ap.add_argument("--real", action="store_true",
+                    help="real-hardware profile (config/mission_real.yaml + Dola discovery + "
+                         "UWB cage origin)")
+    args = ap.parse_args(argv)
+
+    cfg = load_real_config() if args.real else load_config()
+    rover_ids = [int(x) for x in os.environ.get(
+        "HULA_ROVER_IDS", "20,21,22,23,24").split(",")]
+    cycles = int(os.environ.get("HULA_PHASE2_CYCLES", "3"))
+    dwell = float(os.environ.get("HULA_PHASE2_DWELL_S", "1.0"))
+    use_dola = bool(os.environ.get("HULA_USE_DOLA"))
+    try:
+        return _run(cfg, real=args.real, sleep=time.sleep, cycles=cycles, dwell=dwell,
+                    rover_ids=rover_ids, use_dola=use_dola)
+    except KeyboardInterrupt:                         # before the run loop owns it
+        print("\n[main] Ctrl-C before launch — exiting.")
+        return 1
 
 
 if __name__ == "__main__":
