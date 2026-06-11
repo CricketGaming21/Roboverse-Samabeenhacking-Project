@@ -76,8 +76,9 @@ def check_drone(drone, ip: str, tag_id: int, uwb, *, log: Callable = print) -> D
     Commands NO motion."""
     res = DroneCheck(ip=ip, tag_id=tag_id)
     try:
-        res.connected = bool(drone.connect(ip))
-    except Exception as exc:
+        drone.connect(ip)              # real SDK: connect(ip) -> None, RAISES on failure
+        res.connected = True           # returning without raising == connected (the telemetry
+    except Exception as exc:           # reads below are the positive check that data flows)
         res.error = repr(exc)
         log(_format(res))
         return res

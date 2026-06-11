@@ -56,6 +56,21 @@ def test_connect_failure_is_fail(world):
     assert r.connected is False and r.passed is False and "no route" in r.error
 
 
+def test_connect_returning_none_is_success(world):
+    """Real-SDK contract: connect(ip) -> None (raises on failure). Returning None must NOT
+    be read as a FAIL — `bool(connect(...))` would wrongly mark every real drone disconnected."""
+    uwb = fuwb.FakeUWBParserThread(world=world)
+
+    class _NoneConnect(fpx.FakeDroneAPI):
+        def connect(self, ip):
+            super().connect(ip)      # do the real connect bookkeeping (binds tag/start)
+            return None              # ...but return None, exactly like the real SDK
+
+    r = check_drone(_NoneConnect(world), "10.0.0.11", 0, uwb, log=_silent)
+    assert r.connected is True       # no exception == connected
+    assert r.telemetry_ok and r.uwb_ok and r.passed is True
+
+
 # --------------------------------------------------------------------------- #
 # READ-ONLY: never commands motion
 # --------------------------------------------------------------------------- #
