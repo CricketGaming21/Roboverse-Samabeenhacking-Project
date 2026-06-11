@@ -88,6 +88,8 @@ class ScanOutcome:
     in_view: set = field(default_factory=set)        # decodable rover ids in view (banked or not)
     marginal: List[Tuple[int, Detection]] = field(default_factory=list)  # in-zone, decodable,
     #                                                  NOT gate-passing → hand to lock_and_tag
+    decoded_bboxes: List[Tuple[int, int, int, int]] = field(default_factory=list)  # EVERY decoded
+    #                marker (rover or pad) — an "explained" blob the persist channel must skip
 
 
 class ScanBanker:
@@ -149,6 +151,7 @@ class ScanBanker:
         qualifying: set = set()
         for d in confirm_with_aruco(bgr, self.dictionary):
             mid = d.marker_id
+            out.decoded_bboxes.append(d.bbox)        # any decoded marker is an EXPLAINED blob
             if mid is None or not is_rover_id(mid, self.allow):
                 continue
             out.in_view.add(mid)
@@ -292,11 +295,25 @@ def _on_footprint(xy: Point, footprints) -> bool:
     return False
 
 
+def _bbox_overlaps_center(bbox, exclude_bboxes) -> bool:
+    """True if `bbox`'s centre lies inside any excluded bbox (a decoded, EXPLAINED marker)."""
+    bx, by, bw, bh = bbox
+    cxp, cyp = bx + bw / 2.0, by + bh / 2.0
+    for ex, ey, ew, eh in exclude_bboxes or ():
+        if ex <= cxp <= ex + ew and ey <= cyp <= ey + eh:
+            return True
+    return False
+
+
 def _nearest_presence(presence, bgr, target_xy, drone, gimbal_deg, intr, uwb, tag_id,
-                      footprints, bounds, min_area_px):
+                      footprints, bounds, min_area_px, exclude_bboxes=()):
     """The body-blob candidate that best explains a rover near `target_xy`: projected onto the
     floor (live pitch), in bounds, NOT on a crate footprint, big enough. Returns the Detection
-    (with its bbox) or None. This is the presence channel — a rover the gimbal hasn't yet shown."""
+    (with its bbox) or None. This is the presence channel — a rover the gimbal hasn't yet shown.
+
+    A blob whose centre sits on a DECODED marker (`exclude_bboxes`) is skipped: that rover is
+    already explained (banked / out-of-zone) — persisting on it would waste the hold on an
+    already-handled target instead of the genuinely-unread (out-of-cone) body."""
     cam_xy = drone_arena_xy(drone, uwb, tag_id)
     yaw = drone.get_orientation().yaw
     alt_m = drone.get_altitude() / 100.0
@@ -305,6 +322,8 @@ def _nearest_presence(presence, bgr, target_xy, drone, gimbal_deg, intr, uwb, ta
         bx, by, bw, bh = c.bbox
         if bw * bh < min_area_px:
             continue
+        if _bbox_overlaps_center(c.bbox, exclude_bboxes):
+            continue                                  # explained by a decoded marker → not a mystery body
         xy = _marker_xy(c.bbox, cam_xy, yaw, alt_m, gimbal_deg, intr)
         if xy is None:
             continue
@@ -371,7 +390,8 @@ def persist_and_read(drone, stream, target_xy, state, *, allow, dictionary,
                 sleep(dt)
                 continue
             bgr = frame_bgr(frame)
-            rovers = [d for d in confirm_with_aruco(bgr, dictionary)
+            decoded = confirm_with_aruco(bgr, dictionary)
+            rovers = [d for d in decoded
                       if d.marker_id is not None and is_rover_id(d.marker_id, allow)]
             unbanked = [d for d in rovers if not state.is_tagged(d.marker_id)]
             if unbanked:                                  # gimbal swept a marker into the cone
@@ -397,16 +417,18 @@ def persist_and_read(drone, stream, target_xy, state, *, allow, dictionary,
                     held = 0
                 ex, ey = (bx + bw / 2) - cx, (by + bh / 2) - cy
                 drone.send_manual_control(_clip(kp_px * ey), _clip(kp_px * ex), up, 0.0)
-            elif rovers:                                  # the only rover(s) in view are banked
-                return None                               # bank-and-release: don't re-chase
-            else:                                         # no decodable marker → keep BODY framed
-                held = 0
-                cand = _nearest_presence(presence, bgr, target_xy, drone, gimbal_deg, intr,
-                                         uwb, tag_id, footprints, bounds, presence_min_area_px)
-                if cand is not None:
+            else:                                         # no UNBANKED marker → keep the BODY framed
+                held = 0                                  # (skip ANY decoded/banked marker's blob)
+                cand = _nearest_presence(
+                    presence, bgr, target_xy, drone, gimbal_deg, intr, uwb, tag_id,
+                    footprints, bounds, presence_min_area_px,
+                    exclude_bboxes=[d.bbox for d in decoded])
+                if cand is not None:                      # still an unread body → hold on IT
                     bx, by, bw, bh = cand.bbox
                     ex, ey = (bx + bw / 2) - cx, (by + bh / 2) - cy
                     drone.send_manual_control(_clip(kp_px * ey), _clip(kp_px * ex), up, 0.0)
+                elif rovers:                              # only banked rover(s), no unread body
+                    return None                           # → release (bank-and-release)
                 else:
                     drone.send_manual_control(0.0, 0.0, up, 0.0)   # body lost → station-keep
             if on_step is not None:
@@ -537,6 +559,8 @@ def phase2_search(drone, uwb, tag_id: int, vantages: Sequence[dict], stream, sta
         banked.update(out.banked)
         if done():
             return True
+        if out.banked:                                     # handled an unbanked in-zone read
+            return False                                   #   this frame → don't also persist
         # 2) centre a MARGINAL in-zone read (edge/too-small) so it clears the gate — the only
         #    place a deliberate lock happens now; well-framed reads bank via the gate above.
         if out.marginal:
@@ -550,12 +574,17 @@ def phase2_search(drone, uwb, tag_id: int, vantages: Sequence[dict], stream, sta
                     banker=banker):
                 banked.add(mid)
             return done()
-        # 3) R2 — nothing decodable but a body is present (gimbal out-of-cone): PERSIST
-        if not out.in_view and presence is not None:
+        # 3) R2 — reaching here means NO unbanked in-zone decodable rover to act on (banked
+        #    + marginal both empty). If a body is present (its marker out of the gimbal cone),
+        #    PERSIST until the sweep brings the marker in. NOT gated on `in_view`: an ALREADY-
+        #    BANKED marker sharing the frame must not block persisting on a DIFFERENT out-of-
+        #    cone rover (that gate regressed R2's persistence — convoy id 67 went unbanked).
+        if presence is not None:
             cam_xy = drone_arena_xy(drone, uwb, tag_id)
             yaw, alt = drone.get_orientation().yaw, drone.get_altitude() / 100.0
             cand = _nearest_presence(presence, bgr, None, drone, gimbal_deg, intrinsics,
-                                     uwb, tag_id, footprints, bounds, presence_min_area_px)
+                                     uwb, tag_id, footprints, bounds, presence_min_area_px,
+                                     exclude_bboxes=out.decoded_bboxes)   # skip banked-marker blobs
             if cand is not None:
                 xy = _marker_xy(cand.bbox, cam_xy, yaw, alt, gimbal_deg, intrinsics)
                 if _in_zone(xy):

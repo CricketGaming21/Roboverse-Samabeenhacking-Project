@@ -347,6 +347,57 @@ def test_persist_with_banker_banks_out_of_cone_and_writes_evidence(tmp_path):
 
 
 # --------------------------------------------------------------------------- #
+# R2-persistence not regressed: an ALREADY-BANKED marker in frame must not block
+# persisting on a DIFFERENT out-of-cone rover (the convoy-id-67 stall)
+# --------------------------------------------------------------------------- #
+def test_nearest_presence_excludes_decoded_marker_blob():
+    """A decoded (explained) marker's blob is skipped by the presence channel, so the persist
+    hold targets the genuinely-unread out-of-cone body, not an already-handled marker."""
+    from mission.mission.phase2_search import _nearest_presence
+    w = _world([Marker(45, 4.0, 2.0, size_m=0.20)])    # gimbal off → 45 decodes + renders a blob
+    d, s = _drone_over(w, 4.0, 2.0)                     # nadir over 45
+    bgr = frame_bgr(s.latest_frame)
+    bboxes = [x.bbox for x in confirm_with_aruco(bgr, DICT) if x.marker_id == 45]
+    assert bboxes                                       # 45 is decoded
+    u = fuwb.FakeUWBParserThread(world=w)
+    det = ClassicalRoverDetector()
+    # without exclusion, 45's marker blob IS a presence candidate
+    assert _nearest_presence(det, bgr, None, d, 90.0, INTR, u, 0, (), None, 100) is not None
+    # excluding 45's decoded bbox removes the only blob → nothing to persist on
+    assert _nearest_presence(det, bgr, None, d, 90.0, INTR, u, 0, (), None, 100,
+                             exclude_bboxes=bboxes) is None
+    fpx.set_active_world(None)
+
+
+def test_persist_not_blocked_by_banked_marker_in_frame(tmp_path):
+    """The R2 regression guard: a drone seeing an ALREADY-BANKED rover's decodable marker AND a
+    DIFFERENT out-of-cone rover's body in the same frame must still PERSIST on the body and bank
+    it once the gimbal sweeps the marker into the cone (id 67 went unbanked when this broke)."""
+    w = _world([Marker(67, 4.0, 2.0, size_m=0.20, gimbal_phase_deg=0.0),     # out of cone @ t=0
+                Marker(11, 4.0, 1.5, size_m=0.20, gimbal_phase_deg=153.0)],  # readable @ t=0
+               gimbal=True)
+    fpx.set_active_world(w)
+    d = fpx.FakeDroneAPI(w)
+    d.connect(w.ip_map[0])
+    d.n, d.e, d.alt_cm = 3.0, 2.0, 110.0
+    d.set_camera_angle(CameraPitchMode.DOWN_ABSOLUTE, 52.0)
+    s = d.create_video_stream(); d.set_video_stream(True); s.start()
+    u = fuwb.FakeUWBParserThread(world=w)
+    st, tb = MissionState(), TaskBoard()
+    st.bank(11, None, (4.0, 1.5), 0.0)                 # 11 already banked (decodable, in frame)
+    assert w.marker_readable(w.rovers[0], (3.0, 2.0)) is False   # 67 out of cone at t=0
+    phase2_search(d, u, 0, [{"xy": (3.0, 2.0), "gimbal_deg": 52, "dwell_s": 0.5}],
+                  s, st, tb, bubble=None, all_ids=[11, 67], rover_ids=[11, 67],
+                  dictionary=DICT, budget_cycles=1, mopup_extra_cycles=0, gimbal_deg=52.0,
+                  intrinsics=INTR, presence=ClassicalRoverDetector(),
+                  persist_timeout_s=9.0, evidence=EvidenceWriter(tmp_path),
+                  sleep=NOSLEEP, clock=lambda: w.clock)
+    assert st.is_tagged(67)                            # persisted past the banked-11 marker → banked
+    assert (tmp_path / "rover_67.png").exists()
+    fpx.set_active_world(None)
+
+
+# --------------------------------------------------------------------------- #
 # Phase 1 is untouched — R4 is Phase-2-only, no banking during landing
 # --------------------------------------------------------------------------- #
 def test_phase1_does_not_bank(tmp_path):

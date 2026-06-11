@@ -385,9 +385,12 @@ def _run(cfg, *, real, sleep, cycles, dwell, rover_ids, use_dola=False,
         log(f"  drone tag {tag}: connected  UWB={pos}  -> pad {pid} "
             f"@ ({pad[0]:.2f},{pad[1]:.2f})  state=INIT")
 
+    t0 = time.time()                                              # mission start — evidence shows
+    mission_clock = lambda: time.time() - t0                      # ELAPSED s (not the raw epoch)
     phase2_kwargs = {"budget_cycles": cycles, "dwell_s": dwell, "mopup_extra_cycles": 1,
                      "rover_ids": rover_ids,                        # allow-list (config)
                      "dictionary": cfg.aruco.dictionary,
+                     "clock": mission_clock,                       # R4 evidence caption = elapsed s
                      **r2_phase2_kwargs(cfg, graph=graph,           # held search pitch + gimbal
                                         footprints=footprints, bounds=bounds,
                                         evidence_dir=evidence_dir)}   # persistence + R4 evidence
