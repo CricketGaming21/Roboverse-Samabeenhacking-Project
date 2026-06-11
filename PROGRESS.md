@@ -49,7 +49,7 @@ throughout; **Phase-1 landing untouched** (still 3/3, 1–2 cm); **R2 gimbal per
   R2's semantics (persist iff no UNBANKED in-zone decodable rover): drop the in_view gate; carry
   decoded bboxes so `_nearest_presence` excludes a banked-marker blob; keep framing the unread body
   until its marker sweeps in. Two regression tests lock it.
-- **Bounded persistence — never an unbounded wait** (commit `<this>`): a rover permanently out of
+- **Bounded persistence — never an unbounded wait** (commit `aa44343`): a rover permanently out of
   cone / out of the ~1.25 m off-axis read range used to be re-persisted every dwell frame. Now: a
   hard `persist_timeout_s` per hold → light-orbit fallback (change bearing); after `max_orbits` the
   rover is **RELEASED** as a target (its xy is remembered; never re-held — the decode path still
