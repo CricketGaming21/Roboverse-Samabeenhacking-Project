@@ -19,6 +19,42 @@
 
 **ALL PHASES GREEN — full suite: 174 passed, 1 skipped (the real-sim `integration` test).**
 
+## Sim re-sync to the overhauled hula_sim (SIM profile only — real-day profile untouched) — fake gate green (211 passed, 1 skipped)
+The `hula_sim` was overhauled (new landing zones + arena geometry), so the mission's planner inputs
+were stale and the real-sim convoy landed in empty space. Re-synced the **sim-testing inputs only**;
+`mission_real.yaml` values are untouched (real coords arrive from Discord on the day). TDD, one
+commit per change, full fake suite green throughout.
+- **`load_arena` reads the sim's new `structures:` key** (crates + arch posts) with a `crates:`
+  fallback — one loader for both (commit `2d5b2f3`). Tests cover both keys.
+- **Regenerated `config/arena_truth.yaml`** from the sim's `emit_arena_truth` — new `structures` +
+  `landing_zones`, arena 10×6 (commit `cf56f09`). `test_plan_on_real_arena_truth` retargets to pad 51.
+- **Sim profile pads mirror the sim's landing zones**: 11→(4.40,1.35) 45→(7.85,1.30) 51→(4.40,4.40)
+  valid+designated; 67/101 invalid — clearly commented as **SIM** coords (real = Discord, NOT copied
+  here). `test_p1` valid-pad count 4→3; example plan pad_ids → 11,45,51 (commit `d624fd7`).
+- **`mission_real.yaml` pads marked `# [FROM DISCORD ON THE DAY]` placeholder** — comment only,
+  values unchanged (the real-config test pins them) (commit `b9c0908`).
+- **Compliant pad approach** (commit `3d0fffa`): the sim places designated pad 11 only **0.4 m from
+  an arch post**, so `plan_path(goal=pad)` was inflation-blocked and the route fell back to a straight
+  line that **overflew the raw post** — a compliance flag on Phase-1 ingress AND Phase-2 egress.
+  `plan_path` now admits an endpoint inside the full inflated bubble but clear of a reduced `approach`
+  set: its own incident segments use the reduced margin (a short, raw-clear final approach) while every
+  interior segment stays on full inflation; an endpoint inside the raw obstacle is still refused. New
+  `planner.pad_approach_inflate_m` knob (default 0.20 → real/legacy profiles load unchanged). TDD:
+  ingress, egress, raw-blocked-still-none.
+
+**Real-sim convoy integration (RUN_INTEGRATION=1 + a full `python -m mission.runtime.main` convoy run;
+sim scorers are authoritative):**
+- LandingScorer **3/3 in-hoop** (drones → pads 11/45/51, ≤3 cm sim error).
+- **0 compliance flags** (sim's own compliance referee — was **2** `over_crate` flags at pad 11 before
+  the planner fix; both gone after).
+- **Score 5 — all 5 distinct rover ids banked** by the sim referee (11,45,51,67,101); the sim ended the
+  ambush early at t=181 s (`phase DONE … score 5`).
+- ⚠️ **Observation (not a re-sync regression, flagged for review):** the mission's OWN tally recorded
+  only 2/5 distinct (`[51,67]`). The drones flew the captures (referee scored all 5) but the mission's
+  `lock_and_tag` multi-frame hold is stricter than the referee's single-scan bank, so its self-belief
+  lagged. This is a Phase-2 perception/lock-on tuning matter, orthogonal to the sim re-sync — left for
+  a separate session.
+
 ## Real-hardware enablement (UWB cage) — sim path kept working, fake gate green (203 passed)
 Made the mission flyable on real HULA hardware while leaving the sim path untouched (it still
 loads `mission_config.yaml` + the sim `pyhulax`). TDD, one commit per layer:
