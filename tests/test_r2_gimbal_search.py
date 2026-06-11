@@ -21,6 +21,22 @@ pytestmark = pytest.mark.r2
 DICT = "DICT_6X6_250"
 
 
+# --------------------------------------------------------------------------- #
+# config: search pitch + persistence knobs
+# --------------------------------------------------------------------------- #
+def test_config_search_pitch_and_persistence_defaults():
+    from mission.config import load_config, load_real_config
+    cfg = load_config()
+    assert 45.0 <= cfg.camera.search_pitch_deg <= 60.0     # a MODERATE tilt, not nadir
+    assert cfg.camera.use_nadir_search is False            # baseline off by default
+    assert cfg.search.persist_timeout_s >= 8.0             # holds past one full gimbal sweep
+    assert cfg.search.orbit_step_m <= cfg.speed.cruise_alt_m + 1e-9   # light, ≤ cruise
+    # the real profile (no search section / new camera keys) still loads on the defaults
+    rcfg = load_real_config()
+    assert rcfg.camera.use_nadir_search is False
+    assert rcfg.search.persist_timeout_s >= 8.0
+
+
 def _world(rover: Marker, *, gimbal: bool = True) -> fpx.FakeWorld:
     w = fpx.FakeWorld()
     w.gimbal_enabled = gimbal

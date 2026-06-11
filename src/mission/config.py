@@ -11,7 +11,7 @@ from pathlib import Path
 from typing import List, Optional
 
 import yaml
-from pydantic import BaseModel, ConfigDict, field_validator
+from pydantic import BaseModel, ConfigDict, Field, field_validator
 
 DEFAULT_CONFIG_PATH = (Path(__file__).resolve().parents[2]
                        / "config" / "mission_config.yaml")
@@ -80,6 +80,21 @@ class CameraCfg(_Base):
     h_fov_deg: float
     search_gimbal_deg: float
     read_gimbal_deg: float
+    # R2 moving-gimbal search/read pitch (DOWN degrees: 0=forward, 90=nadir). A MODERATE
+    # forward tilt held throughout — never steepened to nadir (the marker faces any yaw, so
+    # nadir loses a side-facing marker). `use_nadir_search` restores the 90° baseline (a
+    # selectable fallback). Defaults so older/real profiles load unchanged.
+    search_pitch_deg: float = 52.0
+    use_nadir_search: bool = False
+
+
+class SearchCfg(_Base):
+    """R2 phase-2 persistence: when a drone SEES a rover body but can't decode the marker
+    (out of the gimbal cone), it holds on it until rotation brings the marker into the cone."""
+    persist_timeout_s: float = 9.0      # hold past one full gimbal sweep (~8 s) before orbiting
+    orbit_step_m: float = 0.6           # light lateral strafe to change bearing (≤ cruise, no overfly)
+    max_orbits: int = 2                 # light-orbit attempts before giving up a target
+    presence_min_area_px: int = 500     # min body-blob area to treat as a rover presence
 
 
 class PadCfg(_Base):
@@ -132,6 +147,7 @@ class MissionConfig(_Base):
     landing: LandingCfg
     failsafe: FailsafeCfg
     evader: EvaderCfg
+    search: SearchCfg = Field(default_factory=SearchCfg)   # R2 gimbal persistence (defaults if absent)
     discovery: Optional[DiscoveryCfg] = None    # real day; absent on sim → config-IP discovery
 
     def valid_pads(self) -> List[PadCfg]:

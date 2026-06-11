@@ -48,8 +48,18 @@ camera:
   width: 640
   height: 480
   h_fov_deg: 71.0            # [TO CONFIRM on the real drone]
-  search_gimbal_deg: 60      # forward-tilt for low-altitude search (test 30-60); 90 = straight down
-  read_gimbal_deg: 90
+  search_gimbal_deg: 60      # legacy (unused) — superseded by search_pitch_deg
+  read_gimbal_deg: 90        # legacy (unused) — R2 reads at the same moderate pitch, NOT nadir
+  search_pitch_deg: 52       # R2: moderate forward tilt held for search AND read (0=fwd, 90=nadir).
+                             # Do NOT steepen to nadir — the gimbal marker faces any yaw; a side
+                             # marker is lost at nadir. Offset + this tilt keeps it in the cone.
+  use_nadir_search: false    # baseline fallback: set true to search/read straight down (90°)
+
+search:                      # R2 persistence on a seen-but-unread (out-of-cone) rover
+  persist_timeout_s: 9.0     # hold past one full gimbal sweep (~8 s @ 45°/s) before a light orbit
+  orbit_step_m: 0.6          # light lateral strafe to change bearing (≤ cruise; lateral, no overfly)
+  max_orbits: 2              # orbit attempts before releasing a stubborn target
+  presence_min_area_px: 500  # min rover-body blob area (px) to treat as a presence to persist on
 
 pads:                        # [SYNC-WITH-SIM] these are the SIM's landing zones (mirror the sim's
   # sim_config.yaml landing_zones / arena_truth.yaml). They are SIM coords for sim testing ONLY.
