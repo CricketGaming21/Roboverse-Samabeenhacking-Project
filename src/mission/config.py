@@ -134,6 +134,23 @@ class DiscoveryCfg(_Base):
     use_dola: bool = False      # real day: broadcast-discover IPs via Dola (else config IPs)
 
 
+class RealCfg(_Base):
+    """Real-hardware-only init knobs. The sim's DroneAPI lacks the methods these drive
+    (`send_app_heartbeat`, `set_velocity_level`, …), so they are no-ops on the sim — applied
+    only on hardware via the `runtime/sdk_compat.py` hasattr guards. Defaults so the sim /
+    older profiles load with no `real:` section."""
+    heartbeat_hz: float = 10.0          # manual-control keep-alive rate (send_app_heartbeat thread)
+    velocity_level: str = "MEDIUM"      # firmware band for the 0.5 m/s cap (SLOW/MEDIUM/ZOOM/TURBO
+                                        # all clamp ≤0.5; MEDIUM is the usable max)
+
+    @field_validator("heartbeat_hz")
+    @classmethod
+    def _positive_hz(cls, v: float) -> float:
+        if v <= 0.0:
+            raise ValueError("real.heartbeat_hz must be > 0")
+        return v
+
+
 class MissionConfig(_Base):
     meta: MetaCfg
     frame: FrameCfg
@@ -148,6 +165,7 @@ class MissionConfig(_Base):
     failsafe: FailsafeCfg
     evader: EvaderCfg
     search: SearchCfg = Field(default_factory=SearchCfg)   # R2 gimbal persistence (defaults if absent)
+    real: RealCfg = Field(default_factory=RealCfg)         # real-hardware init (no-op on sim)
     discovery: Optional[DiscoveryCfg] = None    # real day; absent on sim → config-IP discovery
 
     def valid_pads(self) -> List[PadCfg]:

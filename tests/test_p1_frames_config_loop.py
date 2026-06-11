@@ -67,6 +67,26 @@ def test_load_default_config():
     assert len(cfg.valid_pads()) == 3                            # sim valid zones: 11,45,51 (67,101 invalid)
     assert {p.id for p in cfg.designated_pads()} == {11, 45, 51}
     assert cfg.uwb.tag_ids == [0, 1, 2]
+    assert cfg.real.heartbeat_hz == 10.0                        # real-hw init knobs (no-op on sim)
+    assert cfg.real.velocity_level == "MEDIUM"
+
+
+def test_real_defaults_when_section_absent(tmp_path):
+    data = yaml.safe_load(DEFAULT_CONFIG_PATH.read_text())
+    data.pop("real", None)                                      # older profile with no real: block
+    p = tmp_path / "c.yaml"
+    p.write_text(yaml.safe_dump(data))
+    cfg = load_config(p)
+    assert cfg.real.heartbeat_hz == 10.0 and cfg.real.velocity_level == "MEDIUM"
+
+
+def test_real_heartbeat_hz_must_be_positive(tmp_path):
+    data = yaml.safe_load(DEFAULT_CONFIG_PATH.read_text())
+    data["real"]["heartbeat_hz"] = 0
+    p = tmp_path / "c.yaml"
+    p.write_text(yaml.safe_dump(data))
+    with pytest.raises(ValidationError):
+        load_config(p)
 
 
 def test_unknown_key_rejected(tmp_path):

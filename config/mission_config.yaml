@@ -84,3 +84,9 @@ failsafe:
 evader:
   secure_autonomous_first: true   # bank the 3 predictable tags before committing to evaders
   contain_with_chokepoints: true
+
+real:                        # real-hardware init only — NO-OP on the sim (its DroneAPI lacks
+  # these methods, so sdk_compat's hasattr guards skip them). Tunable here so the real day needs
+  # no code change. On the sim these values are read but never reach a SDK call.
+  heartbeat_hz: 10           # send_app_heartbeat keep-alive rate while manual control is active
+  velocity_level: MEDIUM     # firmware speed band for the 0.5 m/s HARD cap (MEDIUM = usable max)
