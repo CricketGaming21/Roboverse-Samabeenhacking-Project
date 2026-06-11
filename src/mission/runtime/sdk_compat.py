@@ -172,8 +172,17 @@ def _default_video_resolution():
 
 def release(drone) -> None:
     """Teardown (guarded; no-op on the sim): STOP the heartbeat thread first, then stop manual
-    control, disarm, disconnect. Landing is done via the public `land()` BEFORE release."""
-    _stop_heartbeat(drone)
-    _try(drone, "stop_manual_control")
-    _try(drone, "disarm")
-    _try(drone, "disconnect")
+    control, disarm, disconnect. Landing is done via the public `land()` BEFORE release.
+
+    Each step is isolated: a failure in one (e.g. `disarm()` raising because the drone is already
+    disarmed) must NOT skip `disconnect()` — a connection left open makes the NEXT `connect()` to
+    the same drone fail with 'connect error'. So `disconnect` is always attempted last."""
+    try:
+        _stop_heartbeat(drone)
+    except Exception:
+        pass
+    for _name in ("stop_manual_control", "disarm", "disconnect"):
+        try:
+            _try(drone, _name)
+        except Exception:
+            pass

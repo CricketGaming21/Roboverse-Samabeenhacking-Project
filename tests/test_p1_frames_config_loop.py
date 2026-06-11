@@ -140,6 +140,21 @@ def test_prepare_runs_real_path_on_real_like(make_drone):
     assert "disconnect" in d.real_calls
 
 
+def test_release_always_disconnects_even_if_an_earlier_step_raises(make_drone):
+    """A held link makes the NEXT connect() fail ("connect error"). release() must ALWAYS
+    reach disconnect() even when stop_manual_control/disarm raise on real hardware."""
+    d = make_drone(0, real_like=True)
+    sdk_compat.prepare_manual_control(d, velocity_level="MEDIUM", heartbeat_hz=0.0)
+
+    def _boom(*_a, **_k):
+        raise RuntimeError("disarm failed (e.g. already disarmed)")
+    d.disarm = _boom                                    # real-hw failure mid-teardown
+
+    sdk_compat.release(d)                                # must NOT propagate
+    assert "disconnect" in d.real_calls                 # ...and disconnect STILL ran
+    assert d.connected is False                          # the link was actually freed
+
+
 def test_sim_fake_lacks_all_realonly_methods(drone):
     # the sim DroneAPI has NONE of these → the shim's hasattr-guards are mandatory
     for name in ("set_app_mode", "send_app_heartbeat", "set_velocity_level",

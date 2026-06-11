@@ -263,13 +263,24 @@ def build_live_mission(cfg, *, sleep, use_dola=False, real=False):
     ips = disc.resolve_ordered(log=print) if real else disc.resolve()    # {tag: ip}
 
     drones, streams = {}, {}
-    for tag in sorted(ips):
-        d = pyhulax.DroneAPI()
-        d.connect(ips[tag])
-        sdk_compat.prepare_manual_control(d, velocity_level=cfg.real.velocity_level,
-                                          heartbeat_hz=cfg.real.heartbeat_hz)
-        s = d.create_video_stream()      # created now; camera enabled at Phase-2 start (R1)
-        drones[tag], streams[tag] = d, s
+    try:
+        for tag in sorted(ips):
+            d = pyhulax.DroneAPI()
+            d.connect(ips[tag])
+            sdk_compat.prepare_manual_control(d, velocity_level=cfg.real.velocity_level,
+                                              heartbeat_hz=cfg.real.heartbeat_hz)
+            s = d.create_video_stream()  # created now; camera enabled at Phase-2 start (R1)
+            drones[tag], streams[tag] = d, s
+    except Exception:
+        # A drone that fails to connect/init mid-startup must NOT leak the connections already
+        # opened — an undisconnected drone refuses the NEXT connect ("connect error"). Release
+        # every already-connected drone (stops its heartbeat + disconnects), then re-raise.
+        for _d in drones.values():
+            try:
+                sdk_compat.release(_d)
+            except Exception:
+                pass
+        raise
     uwb = UWBParserThread(x_origin=cfg.uwb.origin_x, y_origin=cfg.uwb.origin_y)
     uwb.start()
 
@@ -416,13 +427,16 @@ def _run(cfg, *, real, sleep, cycles, dwell, rover_ids, use_dola=False,
     except KeyboardInterrupt:
         log("\n[main] Ctrl-C — ABORTING: landing all drones…")
     finally:
-        mission.shutdown()                           # lands every drone
+        mission.shutdown()                           # lands + releases every drone (guarded)
         try:
             uwb.stop()
         except Exception:
             pass
-        for d in drones.values():
-            sdk_compat.release(d)
+        for d in drones.values():                    # belt-and-braces: release ALL drones on
+            try:                                     # any exit path; never let teardown escape
+                sdk_compat.release(d)
+            except Exception:
+                pass
     ew = phase2_kwargs.get("evidence")               # R4: rebuild the final gallery from state
     if ew is not None:
         try:

@@ -36,6 +36,25 @@ def test_connect_check_telemetry_no_motion(world):
         assert d.manual_calls == 0 and d.alt_cm == 0.0
 
 
+def test_connect_check_releases_every_connection(world):
+    """READ-ONLY check must not hold the link: every connection is released (disconnected) so a
+    re-run / the real mission's connect() does not hit 'connect error' on that drone."""
+    from mission.runtime import sdk_compat
+    uwb = fuwb.FakeUWBParserThread(world=world)
+    created = []
+
+    def mk():
+        d = fpx.RealLikeFakeDroneAPI(world)
+        created.append(d)
+        return d
+
+    checks = connect_check.connect_and_telemetry(world.ip_map, uwb=uwb, make_api=mk, log=_silent)
+    assert len(created) == 3 and all(c.passed for c in checks.values())
+    assert all("disconnect" in d.real_calls for d in created)    # link freed on every drone
+    assert all(d.connected is False for d in created)
+    assert all(sdk_compat.heartbeat_running(d) is False for d in created)
+
+
 def test_connect_check_live_uwb_prints(world):
     uwb = fuwb.FakeUWBParserThread(world=world)
     lines = []

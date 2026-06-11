@@ -11,6 +11,7 @@ import pytest
 import yaml
 
 from mission.config import load_real_config
+from mission.runtime import sdk_compat
 from mission.runtime.main import _run, build_live_mission, Mission
 from tests.fakes import fake_pyhulax as fpx
 
@@ -55,6 +56,41 @@ def test_real_build_wiring_and_lands_3of3():
         assert math.hypot(x - px, y - py) <= cfg.landing.hoop_tol_m   # landed in the hoop
     mission.shutdown()
     uwb.stop()
+    fpx.set_active_world(None)
+
+
+def test_build_releases_connected_drones_if_a_later_connect_fails(monkeypatch):
+    """If a drone's connect() raises mid-startup, every drone already connected must be released
+    (heartbeat stopped + disconnected) — else they hold the link and refuse the NEXT connect
+    ('connect error'). Reproduces the post-crash 'next connect fails' bring-up bug."""
+    import sys
+    w = _cage_world()
+    cfg = load_real_config()
+    created = []
+
+    class _FailsOnTag2(fpx.RealLikeFakeDroneAPI):
+        def connect(self, ip):
+            if w.tag_for_ip(ip) == 2:                       # 3rd drone refuses (stale link)
+                raise RuntimeError("connect error: drone holds a stale connection")
+            return super().connect(ip)
+
+    def _factory():
+        d = _FailsOnTag2(w)
+        created.append(d)
+        return d
+
+    monkeypatch.setattr(sys.modules["pyhulax"], "DroneAPI", _factory)
+
+    with pytest.raises(RuntimeError, match="connect error"):
+        build_live_mission(cfg, sleep=NOSLEEP, real=True)
+
+    # the two drones that DID connect (tags 0 and 1) were released — disconnect() ran on each
+    released = [d for d in created if "disconnect" in d.real_calls]
+    assert len(released) == 2
+    assert all(d.connected is False for d in released)      # link actually freed
+    assert all(sdk_compat.heartbeat_running(d) is False for d in released)  # no thread left alive
+    # the failing drone (tag 2) never completed connect, so was never registered or released
+    assert any(d.tag_id == -1 for d in created)
     fpx.set_active_world(None)
 
 

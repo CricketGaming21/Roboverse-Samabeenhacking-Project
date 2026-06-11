@@ -29,10 +29,19 @@ from scripts.hardware_check import check_drone                      # noqa: E402
 
 def connect_and_telemetry(ips: Dict[int, str], *, uwb, make_api: Callable,
                           log: Callable = print) -> Dict[int, object]:
-    """Connect each {tag: ip} and print READ-ONLY telemetry. Returns {tag: DroneCheck}."""
+    """Connect each {tag: ip} and print READ-ONLY telemetry. Returns {tag: DroneCheck}.
+    Each connection is RELEASED after its read (guarded) — a read-only check must never hold
+    the link, or a re-run / the real mission would hit 'connect error' on that drone."""
     out = {}
     for tag, ip in sorted(ips.items()):
-        out[tag] = check_drone(make_api(), ip, tag, uwb, log=log)
+        d = make_api()
+        try:
+            out[tag] = check_drone(d, ip, tag, uwb, log=log)
+        finally:
+            try:
+                sdk_compat.release(d)
+            except Exception:
+                pass
     return out
 
 
