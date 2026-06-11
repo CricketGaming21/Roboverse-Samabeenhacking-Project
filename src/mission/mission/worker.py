@@ -184,6 +184,9 @@ class DroneWorker:
                 stream.start()
 
             self._set(WorkerState.SEARCH)
+            # Hard Phase-2 wall-clock cap from config (overridable) so the search ALWAYS
+            # terminates — a rover permanently out of cone / out of read range can never hang it.
+            kwargs.setdefault("phase_budget_s", cfg.failsafe.phase2_budget_s)
             banked = phase2_search(
                 self.drone, self.uwb, self.tag_id, vantages, stream, state, taskboard,
                 bubble=bubble, all_ids=all_ids, guard=self.guard,

@@ -19,6 +19,66 @@
 
 **ALL PHASES GREEN — full suite: 174 passed, 1 skipped (the real-sim `integration` test).**
 
+## R4 — Banking: scan-while-transit + bank-and-release + evidence capture — fake gate green (242 passed, 1 skipped)
+Closes the gap where the camera SAW rovers it never BANKED (banking happened only during deliberate
+locks). Banking is now CONTINUOUS and the single chokepoint, and it produces the judge deliverable
+(one annotated capture per rover + a gallery). TDD, one commit per change, full fake suite green
+throughout; **Phase-1 landing untouched** (still 3/3, 1–2 cm); **R2 gimbal persistence preserved**
+(mission OWN tally held at **5/5** — see the regression note); **public pyhulax surface unchanged**.
+- **Evidence provenance + writer** (commit `cee9a0e`): `MissionState.Evidence` gains `drone_id` +
+  `path`; `bank()` takes them keyword-only (legacy 4-positional calls unchanged), `set_path` attaches
+  the PNG after the de-dup confirms a NEW id. New `perception/evidence.py`: `caption_for`
+  (`drone <k> · t=<s> · (n,e) m`), `annotate` (high-contrast box + `ID <n>` pill + caption strip,
+  never mutates the source frame), `EvidenceWriter` (one `rover_<id>.png` per id + a dark-theme
+  `index.html` contact-sheet gallery). `logs/evidence/` gitignored as a runtime deliverable.
+- **ScanBanker — scan-while-transit + bank-and-release** (commit `05909ba`): a `ScanBanker` runs on
+  EVERY frame — during the vantage HOPS (new `vantage_patrol(on_frame=…)` hook) AND the dwells —
+  banking a distinct rover the instant it clears the gate (≥40 px, fully in-frame, in-zone) on **5
+  CONSECUTIVE frames seen by the same drone**, with NO deliberate dwell-lock (so a drone banks a rover
+  it resolves while flying). Bank-and-release: an already-banked id is ignored (no re-lock/re-bank/
+  dwell — its streak is dropped); on a bank the camera returns to the search pitch. `lock_and_tag` is
+  kept only to centre a marginal/edge read; it and `persist_and_read` route their bank through the
+  banker so evidence + provenance + camera-release are uniform. Transit scanning is motion-passive.
+- **Runtime wiring** (commit `b20f2dd` + clock fix): `r2_phase2_kwargs` builds the `EvidenceWriter`;
+  `_run` rebuilds the final gallery + logs the capture count, and feeds an ELAPSED-seconds `clock` so
+  captions read `t=<s>` (not the raw epoch).
+- **R2-persistence regression FIXED** (commit `f51b4f7`): the first two convoy runs stalled at 4/5
+  (id 67 never banked). Cause: the rewrite gated the persist path on `not out.in_view`, but in_view
+  includes ALREADY-BANKED ids — a banked marker sharing the frame skipped persist; and
+  `persist_and_read` bailed its hold the instant the only DECODABLE marker was a banked one. Fixed to
+  R2's semantics (persist iff no UNBANKED in-zone decodable rover): drop the in_view gate; carry
+  decoded bboxes so `_nearest_presence` excludes a banked-marker blob; keep framing the unread body
+  until its marker sweeps in. Two regression tests lock it.
+- **Bounded persistence — never an unbounded wait** (commit `<this>`): a rover permanently out of
+  cone / out of the ~1.25 m off-axis read range used to be re-persisted every dwell frame. Now: a
+  hard `persist_timeout_s` per hold → light-orbit fallback (change bearing); after `max_orbits` the
+  rover is **RELEASED** as a target (its xy is remembered; never re-held — the decode path still
+  banks it free if its marker ever shows); a hard **Phase-2 wall-clock cap** (`failsafe.phase2_budget_s`
+  = 180 s, injectable `now`, env override `HULA_PHASE2_BUDGET_S`) stops the whole search so the
+  mission ALWAYS terminates and lands all in `finally`. Tests: a tiny-marker (unreadable) rover times
+  out → orbits → is released → the run completes within the cap and is never banked (overhead variant
+  too). The integration command is itself wrapped in a shell `timeout` so a run can never hang.
+
+**Real-sim convoy integration (gimbal ON, convoy roster, `python -m mission.runtime.main`):**
+- LandingScorer **3/3 in-hoop** (drones → pads 11/51/45 @ 1–2 cm SCORED).
+- **Mission's OWN distinct-id tally: 5/5** `[11,45,51,67,101]` — every rover banked by the mission's
+  own ScanBanker (proven by 5 distinct `logs/evidence/rover_<id>.png`, each written ONLY on a
+  mission-side bank). Referee independently scored **5/5**; the sim ended the ambush EARLY at t=82.5 s.
+  drone 0 banked 67 & 51; drone 1 banked 11, 45, 101.
+- **0 compliance flags** (ComplianceMonitor `enabled`; `logs/compliance/compliance.log` appends-on-
+  violation and stayed untouched through the run; no compliance line in the run log).
+- **No drone hit RTL.** In the R2 run drone 2 hit battery-RTL mid-Phase-2 (persistence costs battery);
+  here banking finished by t=82.5 s with **no RTL** — direct evidence scan-while-transit relieved the
+  battery pressure R2 introduced (fewer/no long persistence holds).
+- **Evidence deliverable:** `logs/evidence/` holds one clean annotated 640×480 capture per banked id
+  (green box + `ID <n>` pill + `drone <k> · t=<s> · (n,e) m` caption) + a working dark-theme
+  `index.html` gallery (5 cards).
+- ⚠️ **Note (not a mission bug):** the in-process PyBullet sim exits at C level during episode TEARDOWN
+  (after `phase DONE — score 5`), so the mission's own `_report` stdout line was lost on this run;
+  every number it prints was confirmed independently (sim landing log, the 5 mission-side evidence
+  PNGs, the untouched compliance log). The `finally`-lands-every-drone path is unaffected on real
+  hardware (no PyBullet teardown there).
+
 ## R2 — Phase-2 search/read tuned for the MOVING GIMBAL (persistence) — fake gate green (221 passed, 1 skipped)
 The sim models each rover's marker on a gimbal: its facing yaw sweeps (45°/s, 8 s period) and a
 drone DECODES it only within ±60° of the rover→drone bearing — **never from directly overhead**.

@@ -505,6 +505,9 @@ def phase2_search(drone, uwb, tag_id: int, vantages: Sequence[dict], stream, sta
                   presence=None, footprints: Sequence = (), bounds=None,
                   persist_timeout_s: float = 9.0, orbit_step_m: float = 0.6,
                   max_orbits: int = 2, presence_min_area_px: int = 500,
+                  release_radius_m: float = 0.8,
+                  phase_budget_s: Optional[float] = None,
+                  now: Callable[[], float] = time.monotonic,
                   evidence=None, graph=None, sleep=time.sleep,
                   clock: Callable[[], float] = time.time,
                   on_step=None, **loop_kwargs) -> set:
@@ -523,10 +526,25 @@ def phase2_search(drone, uwb, tag_id: int, vantages: Sequence[dict], stream, sta
     lateral orbit breaks a stuck hold. Returns the set of ids THIS drone banked."""
     banked: set = set()
     flags = {"mopup": False}
+    released: List[Point] = []                              # bodies persist gave up on (never re-hold)
     allow = set(rover_ids if rover_ids is not None else (all_ids or []))
+    t_start = now()
 
     def done() -> bool:
         return all_ids is not None and len(set(all_ids) - state.tagged()) == 0
+
+    def expired() -> bool:
+        """Hard Phase-2 wall-clock cap: the mission ALWAYS terminates (then lands all in
+        `finally`) even if a rover is permanently out of cone / out of read range."""
+        return phase_budget_s is not None and (now() - t_start) >= phase_budget_s
+
+    def stop() -> bool:
+        return done() or expired()
+
+    def _is_released(xy) -> bool:
+        """A body persist already gave up on (out of read range) — don't re-hold; move on."""
+        return xy is not None and any(
+            math.hypot(xy[0] - r[0], xy[1] - r[1]) <= release_radius_m for r in released)
 
     def _in_zone(xy) -> bool:
         return (bubble is None or flags["mopup"]
@@ -540,16 +558,16 @@ def phase2_search(drone, uwb, tag_id: int, vantages: Sequence[dict], stream, sta
 
     def transit_scan() -> bool:
         """on_frame: scan-while-transit — bank a gate-passing read mid-hop (passive, no motion)."""
-        if done():
+        if stop():
             return True
         frame = stream.latest_frame
         if frame is None:
             return False
         banked.update(banker.scan(frame_bgr(frame)).banked)
-        return done()
+        return stop()
 
     def scan_and_lock() -> bool:
-        if done():
+        if stop():
             return True
         frame = stream.latest_frame
         if frame is None:
@@ -557,7 +575,7 @@ def phase2_search(drone, uwb, tag_id: int, vantages: Sequence[dict], stream, sta
         bgr = frame_bgr(frame)
         out = banker.scan(bgr)                             # 1) continuous gate (transit + dwell)
         banked.update(out.banked)
-        if done():
+        if stop():
             return True
         if out.banked:                                     # handled an unbanked in-zone read
             return False                                   #   this frame → don't also persist
@@ -571,9 +589,9 @@ def phase2_search(drone, uwb, tag_id: int, vantages: Sequence[dict], stream, sta
                     lock_timeout_s=lock_timeout_s, dictionary=dictionary, rate_hz=rate_hz,
                     kp_px=kp_px, gimbal_deg=gimbal_deg, intrinsics=intrinsics, uwb=uwb,
                     tag_id=tag_id, alt_m=alt_m, sleep=sleep, clock=clock, on_step=on_step,
-                    banker=banker):
+                    should_stop=stop, banker=banker):
                 banked.add(mid)
-            return done()
+            return stop()
         # 3) R2 — reaching here means NO unbanked in-zone decodable rover to act on (banked
         #    + marginal both empty). If a body is present (its marker out of the gimbal cone),
         #    PERSIST until the sweep brings the marker in. NOT gated on `in_view`: an ALREADY-
@@ -587,7 +605,7 @@ def phase2_search(drone, uwb, tag_id: int, vantages: Sequence[dict], stream, sta
                                      exclude_bboxes=out.decoded_bboxes)   # skip banked-marker blobs
             if cand is not None:
                 xy = _marker_xy(cand.bbox, cam_xy, yaw, alt, gimbal_deg, intrinsics)
-                if _in_zone(xy):
+                if _in_zone(xy) and not _is_released(xy):   # released → out of read range, move on
                     taskboard.see(Track(marker_id=None, xy=xy if xy else cam_xy, t=clock()))
                     mid = persist_and_read(
                         drone, stream, xy, state, allow=allow, dictionary=dictionary,
@@ -597,14 +615,16 @@ def phase2_search(drone, uwb, tag_id: int, vantages: Sequence[dict], stream, sta
                         max_orbits=max_orbits, hold_frames=hold_frames,
                         min_marker_px=min_marker_px, presence_min_area_px=presence_min_area_px,
                         kp_px=kp_px, rate_hz=rate_hz, guard=guard, sleep=sleep, clock=clock,
-                        on_step=on_step, banker=banker)
+                        should_stop=stop, on_step=on_step, banker=banker)
                     if mid is not None:
                         banked.add(mid)
-                    return done()
-        return done()
+                    elif xy is not None and not expired():   # timed out + orbited, still no read →
+                        released.append(xy)                  #   RELEASE this rover, never re-hold it
+                    return stop()
+        return stop()
 
     for cycle in range(budget_cycles):
-        if done():
+        if stop():                                        # done OR Phase-2 wall-clock cap hit
             break
         if all_ids is not None and cycle >= budget_cycles - mopup_extra_cycles:
             flags["mopup"] = True                         # endgame: drop the gate

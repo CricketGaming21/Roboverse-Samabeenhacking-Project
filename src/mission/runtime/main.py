@@ -367,7 +367,7 @@ def _report(cfg, mission, pad_coords, plan, land_xy, footprints, rover_ids):
 
 
 def _run(cfg, *, real, sleep, cycles, dwell, rover_ids, use_dola=False,
-         evidence_dir="logs/evidence", log=print) -> int:
+         evidence_dir="logs/evidence", phase_budget_s=None, log=print) -> int:
     """Discover+connect, UWB (cage origin), Phase 1 land, Phase 2 search — landing every
     drone in a `finally`, holding on UWB dropout, Ctrl-C → abort-and-land. Returns 0."""
     import time
@@ -394,6 +394,8 @@ def _run(cfg, *, real, sleep, cycles, dwell, rover_ids, use_dola=False,
                      **r2_phase2_kwargs(cfg, graph=graph,           # held search pitch + gimbal
                                         footprints=footprints, bounds=bounds,
                                         evidence_dir=evidence_dir)}   # persistence + R4 evidence
+    if phase_budget_s is not None:                                # else worker uses cfg cap (180 s)
+        phase2_kwargs["phase_budget_s"] = phase_budget_s          # hard Phase-2 wall-clock cap
     mission = Mission(cfg, plan, drones=drones, uwb=uwb, streams=streams,
                       pad_coords=pad_coords, footprints=footprints,
                       all_rover_ids=rover_ids, intrinsics=intr, sleep=sleep,
@@ -452,9 +454,11 @@ def main(argv=None) -> int:
     cycles = int(os.environ.get("HULA_PHASE2_CYCLES", "3"))
     dwell = float(os.environ.get("HULA_PHASE2_DWELL_S", "1.0"))
     use_dola = bool(os.environ.get("HULA_USE_DOLA"))
+    budget_env = os.environ.get("HULA_PHASE2_BUDGET_S")  # override the cfg wall-clock cap (e.g. a
+    phase_budget_s = float(budget_env) if budget_env else None   # GPU-slow sim where rtf << 1)
     try:
         return _run(cfg, real=args.real, sleep=time.sleep, cycles=cycles, dwell=dwell,
-                    rover_ids=rover_ids, use_dola=use_dola)
+                    rover_ids=rover_ids, use_dola=use_dola, phase_budget_s=phase_budget_s)
     except KeyboardInterrupt:                         # before the run loop owns it
         print("\n[main] Ctrl-C before launch — exiting.")
         return 1

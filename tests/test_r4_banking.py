@@ -398,6 +398,62 @@ def test_persist_not_blocked_by_banked_marker_in_frame(tmp_path):
 
 
 # --------------------------------------------------------------------------- #
+# Bounded persistence — a permanently-unreadable rover never hangs the run
+# --------------------------------------------------------------------------- #
+def test_permanently_unreadable_rover_does_not_hang():
+    """A rover whose marker is OUT OF READ RANGE (tiny / never decodes even when geometrically
+    in-cone) must NOT hang Phase-2: persist times out, the light-orbit fallback fires, the rover
+    is RELEASED, and the run terminates (here via the Phase-2 wall-clock cap). The rover is never
+    banked. (`--timeout=60` would also catch a true hang; this asserts the bound explicitly.)"""
+    w = _world([Marker(20, 4.0, 2.0, size_m=0.04, gimbal_phase_deg=0.0)], gimbal=True)  # too small
+    fpx.set_active_world(w)                                                              # to decode
+    d = fpx.FakeDroneAPI(w)
+    d.connect(w.ip_map[0])
+    d.n, d.e, d.alt_cm = 3.0, 2.0, 110.0               # offset → marker periodically in-cone…
+    d.set_camera_angle(CameraPitchMode.DOWN_ABSOLUTE, 52.0)
+    s = d.create_video_stream(); d.set_video_stream(True); s.start()
+    u = fuwb.FakeUWBParserThread(world=w)
+    st, tb = MissionState(), TaskBoard()
+    phases = []
+    banked = phase2_search(
+        d, u, 0, [{"xy": (3.0, 2.0), "gimbal_deg": 52, "dwell_s": 0.5}], s, st, tb,
+        bubble=None, all_ids=[20], rover_ids=[20], dictionary=DICT, gimbal_deg=52.0,
+        intrinsics=INTR, presence=ClassicalRoverDetector(),
+        persist_timeout_s=0.8, max_orbits=1, orbit_step_m=0.5,
+        budget_cycles=50, dwell_s=0.5,                 # a huge cycle budget → ONLY the cap can stop it
+        phase_budget_s=8.0, now=lambda: w.clock,       # hard wall-clock cap (sim-seconds here)
+        sleep=NOSLEEP, clock=lambda: w.clock,
+        on_step=lambda i: phases.append(i.get("phase")))
+    assert banked == set() and not st.is_tagged(20)    # never banked (out of read range)
+    assert "orbit" in phases                           # the light-orbit fallback fired
+    assert w.clock <= 8.0 + 4.0                         # terminated at the cap (+ margin), no runaway
+    fpx.set_active_world(None)
+
+
+def test_phase2_terminates_when_marker_never_reads_even_overhead():
+    """Belt-and-braces: even with NO orbit budget, an unreadable rover times out and the run ends
+    within the wall-clock cap — the search always returns so the mission can land all in finally."""
+    w = _world([Marker(20, 4.0, 2.0, size_m=0.04)], gimbal=True)
+    fpx.set_active_world(w)
+    d = fpx.FakeDroneAPI(w)
+    d.connect(w.ip_map[0])
+    d.n, d.e, d.alt_cm = 4.0, 2.0, 110.0               # overhead → marker NEVER readable
+    d.set_camera_angle(CameraPitchMode.DOWN_ABSOLUTE, 52.0)
+    s = d.create_video_stream(); d.set_video_stream(True); s.start()
+    u = fuwb.FakeUWBParserThread(world=w)
+    st, tb = MissionState(), TaskBoard()
+    banked = phase2_search(
+        d, u, 0, [{"xy": (4.0, 2.0), "gimbal_deg": 52, "dwell_s": 0.5}], s, st, tb,
+        bubble=None, all_ids=[20], rover_ids=[20], dictionary=DICT, gimbal_deg=52.0,
+        intrinsics=INTR, presence=ClassicalRoverDetector(), persist_timeout_s=0.5,
+        max_orbits=0, budget_cycles=50, phase_budget_s=5.0, now=lambda: w.clock,
+        sleep=NOSLEEP, clock=lambda: w.clock)
+    assert banked == set() and not st.is_tagged(20)    # never banked, never hung
+    assert w.clock <= 5.0 + 3.0                         # stopped at the cap
+    fpx.set_active_world(None)
+
+
+# --------------------------------------------------------------------------- #
 # Phase 1 is untouched — R4 is Phase-2-only, no banking during landing
 # --------------------------------------------------------------------------- #
 def test_phase1_does_not_bank(tmp_path):
