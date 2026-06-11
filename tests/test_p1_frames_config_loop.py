@@ -182,6 +182,20 @@ def test_velocity_level_name_resolves_to_band(make_drone):
     sdk_compat.release(d)
 
 
+def test_start_video_stream_sets_low_res_before_stream_on(make_drone, drone):
+    # real: set_video_resolution must be recorded BEFORE the stream is turned on
+    d = make_drone(0, real_like=True)
+    sdk_compat.start_video_stream(d)
+    res_idx = next(i for i, c in enumerate(d.real_calls)
+                   if c.startswith("set_video_resolution"))
+    on_idx = d.real_calls.index("set_video_stream:True")
+    assert res_idx < on_idx
+    assert d.video_enabled is True
+    # sim: no set_video_resolution surface → just enables the stream, no raise
+    sdk_compat.start_video_stream(drone)
+    assert drone.video_enabled is True
+
+
 # --------------------------------------------------------------------------- #
 # fly_to_uwb
 # --------------------------------------------------------------------------- #

@@ -716,6 +716,15 @@ class RealLikeFakeDroneAPI(FakeDroneAPI):
     def enable_battery_failsafe(self, *a, **k) -> CommandResult:
         return self._rec("enable_battery_failsafe")
 
+    def set_video_resolution(self, resolution) -> CommandResult:
+        # real-only: drop resolution before enabling the stream. Record into the SAME ordered
+        # log as set_video_stream so the before-stream-on ordering is assertable.
+        return self._rec(f"set_video_resolution:{int(resolution)}")
+
+    def set_video_stream(self, enabled: bool) -> CommandResult:
+        self.real_calls.append(f"set_video_stream:{enabled}")
+        return super().set_video_stream(enabled)
+
     def get_velocity(self) -> Vector3:
         self.real_calls.append("get_velocity")
         return Vector3(0.0, 0.0, 0.0)

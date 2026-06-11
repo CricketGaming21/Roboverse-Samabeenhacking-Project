@@ -182,8 +182,8 @@ class DroneWorker:
                                                   heartbeat_hz=cfg.real.heartbeat_hz)
                 self.drone.takeoff(int(m_to_cm(cfg.speed.cruise_alt_m)))
             if stream is not None:                         # camera ON at Phase-2 start
-                self.drone.set_video_stream(True)          # (off during Phase-1 UWB landing)
-                stream.start()
+                sdk_compat.start_video_stream(self.drone)   # real: LOW res first (3 streams);
+                stream.start()                              # (off during Phase-1 UWB landing)
 
             self._set(WorkerState.SEARCH)
             # Hard Phase-2 wall-clock cap from config (overridable) so the search ALWAYS
