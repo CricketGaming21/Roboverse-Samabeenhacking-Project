@@ -149,6 +149,145 @@ def lock_and_tag(drone, stream, detection, state, *, hold_frames: int = 5,
 
 
 # --------------------------------------------------------------------------- #
+# persistence on a seen-but-unread (out-of-cone) rover  (R2)
+# --------------------------------------------------------------------------- #
+def _clip(v: float, lo: float = -1.0, hi: float = 1.0) -> float:
+    return lo if v < lo else hi if v > hi else v
+
+
+def _on_footprint(xy: Point, footprints) -> bool:
+    """True if arena point `xy` sits on a (raw) crate footprint — used to reject body blobs
+    that are actually obstacles, not rovers."""
+    for cn, ce, sn, se in footprints or ():
+        if abs(xy[0] - cn) <= sn / 2 and abs(xy[1] - ce) <= se / 2:
+            return True
+    return False
+
+
+def _nearest_presence(presence, bgr, target_xy, drone, gimbal_deg, intr, uwb, tag_id,
+                      footprints, bounds, min_area_px):
+    """The body-blob candidate that best explains a rover near `target_xy`: projected onto the
+    floor (live pitch), in bounds, NOT on a crate footprint, big enough. Returns the Detection
+    (with its bbox) or None. This is the presence channel — a rover the gimbal hasn't yet shown."""
+    cam_xy = drone_arena_xy(drone, uwb, tag_id)
+    yaw = drone.get_orientation().yaw
+    alt_m = drone.get_altitude() / 100.0
+    best, best_d = None, float("inf")
+    for c in presence.detect(bgr):
+        bx, by, bw, bh = c.bbox
+        if bw * bh < min_area_px:
+            continue
+        xy = _marker_xy(c.bbox, cam_xy, yaw, alt_m, gimbal_deg, intr)
+        if xy is None:
+            continue
+        if bounds is not None and not bounds.contains(xy):
+            continue
+        if _on_footprint(xy, footprints):
+            continue
+        d = math.hypot(xy[0] - target_xy[0], xy[1] - target_xy[1]) if target_xy else 0.0
+        if d < best_d:
+            best, best_d = c, d
+    return best
+
+
+def _light_orbit(drone, uwb, tag_id, step_m, footprints, bounds, alt_m, *, guard=None,
+                 sleep=time.sleep, on_step=None, **loop_kwargs) -> bool:
+    """A LIGHT lateral strafe (≤ step_m, EAST or WEST) to change the rover->drone bearing when a
+    hold is stuck (unlucky gimbal phase / line-of-sight blocked). Lateral only — never `+up`,
+    never onto a footprint. Returns True if it moved."""
+    cur = drone_arena_xy(drone, uwb, tag_id)
+    if cur is None:
+        return False
+    for sign in (1.0, -1.0):
+        tgt = (cur[0], cur[1] + sign * step_m)
+        if bounds is not None and not bounds.contains(tgt):
+            continue
+        if _on_footprint(tgt, footprints):
+            continue
+        if on_step is not None:
+            on_step({"phase": "orbit"})
+        fly_to_uwb(drone, uwb, tag_id, tgt, alt_m=alt_m, guard=guard, sleep=sleep,
+                   on_step=on_step, **loop_kwargs)
+        return True
+    return False
+
+
+def persist_and_read(drone, stream, target_xy, state, *, allow, dictionary,
+                     gimbal_deg, intrinsics, uwb, tag_id, alt_m, presence, footprints,
+                     bounds, persist_timeout_s=9.0, orbit_step_m=0.6, max_orbits=2,
+                     hold_frames=5, min_marker_px=40, frame_margin_px=8,
+                     presence_min_area_px=500, kp_px=0.02, rate_hz=20.0, guard=None,
+                     sleep=time.sleep, clock: Callable[[], float] = time.time,
+                     should_stop: Optional[Callable[[], bool]] = None, on_step=None,
+                     **loop_kwargs) -> Optional[int]:
+    """Hold on a SEEN-but-UNREAD rover (body visible, marker out of the gimbal cone): keep it
+    framed at the held SEARCH PITCH and wait for the sweeping gimbal to bring its marker into
+    the cone, then bank it. The target stays ACTIVE across ticks — it is NOT dropped just
+    because cv2.aruco can't decode this frame. After `persist_timeout_s` without a read a LIGHT
+    lateral orbit changes the bearing (fallback, not the primary move). Returns the banked id,
+    or None (timed out / already-banked / lost)."""
+    intr = intrinsics or CameraIntrinsics()
+    cx, cy = intr.cx, intr.cy
+    dt = 1.0 / rate_hz if rate_hz > 0 else 0.05
+    hold_steps = max(1, int(persist_timeout_s * rate_hz))
+    drone.set_camera_angle(_DOWN, gimbal_deg)            # held MODERATE; never steepen to nadir
+    held = 0
+    for orbit in range(max_orbits + 1):
+        for _ in range(hold_steps):
+            if should_stop is not None and should_stop():
+                return None
+            up = _alt_up(drone, alt_m)
+            frame = stream.latest_frame
+            if frame is None:
+                drone.send_manual_control(0.0, 0.0, up, 0.0)
+                sleep(dt)
+                continue
+            bgr = frame_bgr(frame)
+            rovers = [d for d in confirm_with_aruco(bgr, dictionary)
+                      if d.marker_id is not None and is_rover_id(d.marker_id, allow)]
+            unbanked = [d for d in rovers if not state.is_tagged(d.marker_id)]
+            if unbanked:                                  # gimbal swept a marker into the cone
+                d = unbanked[0]
+                bx, by, bw, bh = d.bbox
+                h_px, w_px = bgr.shape[0], bgr.shape[1]
+                in_frame = (bx >= frame_margin_px and by >= frame_margin_px
+                            and bx + bw <= w_px - 1 - frame_margin_px
+                            and by + bh <= h_px - 1 - frame_margin_px)
+                if max(bw, bh) >= min_marker_px and in_frame:
+                    held += 1
+                    if held >= hold_frames:
+                        cam_xy = drone_arena_xy(drone, uwb, tag_id)
+                        xy = _marker_xy(d.bbox, cam_xy, drone.get_orientation().yaw,
+                                        drone.get_altitude() / 100.0, gimbal_deg, intr)
+                        state.bank(d.marker_id, bgr, xy, clock())
+                        drone.send_manual_control(0.0, 0.0, up, 0.0)
+                        return d.marker_id
+                else:
+                    held = 0
+                ex, ey = (bx + bw / 2) - cx, (by + bh / 2) - cy
+                drone.send_manual_control(_clip(kp_px * ey), _clip(kp_px * ex), up, 0.0)
+            elif rovers:                                  # the only rover(s) in view are banked
+                return None                               # bank-and-release: don't re-chase
+            else:                                         # no decodable marker → keep BODY framed
+                held = 0
+                cand = _nearest_presence(presence, bgr, target_xy, drone, gimbal_deg, intr,
+                                         uwb, tag_id, footprints, bounds, presence_min_area_px)
+                if cand is not None:
+                    bx, by, bw, bh = cand.bbox
+                    ex, ey = (bx + bw / 2) - cx, (by + bh / 2) - cy
+                    drone.send_manual_control(_clip(kp_px * ey), _clip(kp_px * ex), up, 0.0)
+                else:
+                    drone.send_manual_control(0.0, 0.0, up, 0.0)   # body lost → station-keep
+            if on_step is not None:
+                on_step({"phase": "persist", "orbit": orbit})
+            sleep(dt)
+        if orbit < max_orbits:                            # held a full sweep with no read → orbit
+            _light_orbit(drone, uwb, tag_id, orbit_step_m, footprints, bounds, alt_m,
+                         guard=guard, sleep=sleep, on_step=on_step, **loop_kwargs)
+    return None
+
+
+# --------------------------------------------------------------------------- #
 # vantage patrol
 # --------------------------------------------------------------------------- #
 def vantage_patrol(drone, uwb, tag_id: int, vantages: Sequence[dict],
@@ -199,11 +338,18 @@ def phase2_search(drone, uwb, tag_id: int, vantages: Sequence[dict], stream, sta
                   intrinsics: Optional[CameraIntrinsics] = None, alt_m: float = 1.1,
                   rover_ids: Optional[Sequence[int]] = None,
                   dictionary: str = "DICT_6X6_250",
+                  presence=None, footprints: Sequence = (), bounds=None,
+                  persist_timeout_s: float = 9.0, orbit_step_m: float = 0.6,
+                  max_orbits: int = 2, presence_min_area_px: int = 500,
                   graph=None, sleep=time.sleep, clock: Callable[[], float] = time.time,
                   on_step=None, **loop_kwargs) -> set:
     """Patrol vantages, lock-and-tag distinct rover ids within `bubble` (mop-up drops the
     gate near the end). Banks ONLY ids in the `rover_ids` allow-list (defaults to `all_ids`).
-    Returns the set of ids THIS drone banked."""
+
+    R2 (when `presence` — a body detector — is given): a rover whose marker is OUT of the
+    gimbal cone shows only its body. The drone PERSISTS on that body (holding the search pitch,
+    keeping it framed) until the sweeping gimbal brings the marker into the cone and it banks;
+    a light lateral orbit breaks a stuck hold. Returns the set of ids THIS drone banked."""
     banked: set = set()
     flags = {"mopup": False}
     allow = set(rover_ids if rover_ids is not None else (all_ids or []))
@@ -211,23 +357,28 @@ def phase2_search(drone, uwb, tag_id: int, vantages: Sequence[dict], stream, sta
     def done() -> bool:
         return all_ids is not None and len(set(all_ids) - state.tagged()) == 0
 
+    def _in_zone(xy) -> bool:
+        return (bubble is None or flags["mopup"]
+                or (xy is not None and point_in_poly(xy, bubble)))
+
     def scan_and_lock() -> bool:
         if done():
             return True
         frame = stream.latest_frame
         if frame is None:
             return False
+        bgr = frame_bgr(frame)
         cam_xy = drone_arena_xy(drone, uwb, tag_id)
-        for d in confirm_with_aruco(frame_bgr(frame), dictionary):
+        yaw, alt = drone.get_orientation().yaw, drone.get_altitude() / 100.0
+        # 1) a rover whose marker is decodable RIGHT NOW (in the gimbal cone)
+        for d in confirm_with_aruco(bgr, dictionary):
             mid = d.marker_id
             if mid is None or not is_rover_id(mid, allow) or state.is_tagged(mid):
                 continue
-            xy = _marker_xy(d.bbox, cam_xy, drone.get_orientation().yaw,
-                            drone.get_altitude() / 100.0, gimbal_deg, intrinsics)
+            xy = _marker_xy(d.bbox, cam_xy, yaw, alt, gimbal_deg, intrinsics)
             taskboard.see(Track(marker_id=mid, xy=xy if xy is not None else cam_xy,
                                 t=clock()))
-            if (bubble is not None and not flags["mopup"]
-                    and (xy is None or not point_in_poly(xy, bubble))):
+            if not _in_zone(xy):
                 continue                                  # gated out of our zone (logged)
             # commitment: a started lock runs to completion (bounded)
             if lock_and_tag(drone, stream, d, state, hold_frames=hold_frames,
@@ -238,6 +389,26 @@ def phase2_search(drone, uwb, tag_id: int, vantages: Sequence[dict], stream, sta
                             sleep=sleep, clock=clock, on_step=on_step):
                 banked.add(mid)
             return done()                                 # one target per scan frame
+        # 2) R2 — no decodable rover this frame: PERSIST on a seen body (gimbal out-of-cone)
+        if presence is not None:
+            cand = _nearest_presence(presence, bgr, None, drone, gimbal_deg, intrinsics,
+                                     uwb, tag_id, footprints, bounds, presence_min_area_px)
+            if cand is not None:
+                xy = _marker_xy(cand.bbox, cam_xy, yaw, alt, gimbal_deg, intrinsics)
+                if _in_zone(xy):
+                    taskboard.see(Track(marker_id=None, xy=xy if xy else cam_xy, t=clock()))
+                    mid = persist_and_read(
+                        drone, stream, xy, state, allow=allow, dictionary=dictionary,
+                        gimbal_deg=gimbal_deg, intrinsics=intrinsics, uwb=uwb, tag_id=tag_id,
+                        alt_m=alt_m, presence=presence, footprints=footprints, bounds=bounds,
+                        persist_timeout_s=persist_timeout_s, orbit_step_m=orbit_step_m,
+                        max_orbits=max_orbits, hold_frames=hold_frames,
+                        min_marker_px=min_marker_px, presence_min_area_px=presence_min_area_px,
+                        kp_px=kp_px, rate_hz=rate_hz, guard=guard, sleep=sleep, clock=clock,
+                        on_step=on_step)
+                    if mid is not None:
+                        banked.add(mid)
+                    return done()
         return done()
 
     for cycle in range(budget_cycles):

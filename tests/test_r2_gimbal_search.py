@@ -13,6 +13,7 @@ import pytest
 
 from mission.perception.aruco import confirm_with_aruco
 from mission.perception.detector import ClassicalRoverDetector, frame_bgr
+from mission.planner.geometry import Rect
 from tests.fakes import fake_pyhulax as fpx
 from tests.fakes.fake_pyhulax import Marker
 
@@ -98,3 +99,109 @@ def test_gimbal_sweep_brings_marker_into_cone():
     w.clock = 4.0                                                # 45°/s · 4 s = 180° → bearing south
     assert w.marker_readable(w.rovers[0], (d.n, d.e)) is True
     assert 45 in _decode_ids(s)                                  # now decodable
+
+
+# --------------------------------------------------------------------------- #
+# persistence on a seen-but-unread (out-of-cone) rover
+# --------------------------------------------------------------------------- #
+def _uwb(w):
+    from tests.fakes import fake_uwb as fuwb
+    return fuwb.FakeUWBParserThread(world=w)
+
+
+def _state():
+    from mission.world.mission_state import MissionState
+    return MissionState()
+
+
+def _intr():
+    from mission.planner.projection import CameraIntrinsics
+    return CameraIntrinsics(640, 480, 71.0)
+
+
+def _detector():
+    from mission.perception.detector import ClassicalRoverDetector
+    return ClassicalRoverDetector()
+
+
+def test_persistence_banks_initially_out_of_cone_rover():
+    """The core mitigation: a rover whose marker is OUT of the cone at t=0 (body visible,
+    no decode) is banked once the sweeping gimbal brings the marker into the cone — the drone
+    held on it, at the search pitch, the whole time. Also checks the projected evidence xy
+    uses the LIVE (52°) pitch (≈ the true rover position), not nadir."""
+    from mission.mission.phase2_search import persist_and_read
+    w = _world(Marker(45, 4.0, 2.0, size_m=0.20, gimbal_phase_deg=0.0))
+    d, s = _drone_at(w, 3.0, 2.0)
+    assert w.marker_readable(w.rovers[0], (d.n, d.e)) is False    # out of cone initially
+    st, pitches = _state(), []
+    mid = persist_and_read(
+        d, s, (4.0, 2.0), st, allow={45}, dictionary=DICT, gimbal_deg=52.0,
+        intrinsics=_intr(), uwb=_uwb(w), tag_id=0, alt_m=1.1, presence=_detector(),
+        footprints=(), bounds=None, persist_timeout_s=9.0, rate_hz=20.0, sleep=lambda _x: None,
+        clock=lambda: w.clock, on_step=lambda i: pitches.append(d.pitch_down_deg))
+    assert mid == 45 and st.is_tagged(45)                        # persistence banked it
+    assert pitches and max(pitches) <= 60.0                      # held a MODERATE pitch (never nadir)
+    xy = st.evidence()[45].xy
+    assert math.hypot(xy[0] - 4.0, xy[1] - 2.0) < 0.6            # projected with the live pitch
+
+
+def test_seen_but_unread_rover_stays_active_across_ticks():
+    """While the marker is out of cone the drone keeps HOLDING (one control command per tick)
+    — it does not drop the target after the first un-decodable frame."""
+    from mission.mission.phase2_search import persist_and_read
+    w = _world(Marker(45, 4.0, 2.0, size_m=0.20, gimbal_phase_deg=0.0))
+    d, s = _drone_at(w, 3.0, 2.0)
+    n0 = d.manual_calls
+    steps = []
+    mid = persist_and_read(
+        d, s, (4.0, 2.0), _state(), allow={45}, dictionary=DICT, gimbal_deg=52.0,
+        intrinsics=_intr(), uwb=_uwb(w), tag_id=0, alt_m=1.1, presence=_detector(),
+        footprints=(), bounds=None, persist_timeout_s=0.5, max_orbits=0, rate_hz=20.0,
+        sleep=lambda _x: None, clock=lambda: 0.0,                # clock frozen → never sweeps in
+        on_step=lambda i: steps.append(i))
+    assert mid is None                                           # never came into cone (clock frozen)
+    assert d.manual_calls - n0 >= 10                             # held across the whole window
+    assert all(st.get("phase") == "persist" for st in steps)    # target stayed active, no orbit
+
+
+def test_light_orbit_only_after_hold_timeout():
+    """The light orbit is a FALLBACK: it fires only after a full hold window with no read,
+    never during the hold."""
+    from mission.mission.phase2_search import persist_and_read
+    w = _world(Marker(45, 4.0, 2.0, size_m=0.20, gimbal_phase_deg=0.0))
+    d, s = _drone_at(w, 3.0, 2.0)
+    steps = []
+    persist_and_read(
+        d, s, (4.0, 2.0), _state(), allow={45}, dictionary=DICT, gimbal_deg=52.0,
+        intrinsics=_intr(), uwb=_uwb(w), tag_id=0, alt_m=1.1, presence=_detector(),
+        footprints=(), bounds=Rect(0, 0, 10, 6), persist_timeout_s=0.5, max_orbits=1,
+        rate_hz=20.0, sleep=lambda _x: None, clock=lambda: 0.0,
+        on_step=lambda i: steps.append(i.get("phase")))
+    hold_steps = int(0.5 * 20.0)
+    assert "orbit" in steps                                      # it eventually orbited
+    assert steps.index("orbit") >= hold_steps                   # only AFTER a full hold window
+    assert "orbit" not in steps[:hold_steps]                    # never during the hold
+
+
+def test_search_pitch_held_no_nadir_steepening():
+    """A vantage dwell + lock holds the MODERATE search pitch and never steepens to nadir."""
+    from mission.mission.phase2_search import vantage_patrol
+    w = fpx.FakeWorld()
+    w.pads = []
+    w.rovers = []
+    d, _s = _drone_at(w, 2.0, 2.0)
+    vantage_patrol(d, _uwb(w), 0, [{"xy": (4.0, 2.0)}], lambda: False,
+                   gimbal_deg=52.0, dwell_s=0.3, rate_hz=20.0, sleep=lambda _x: None)
+    assert d.pitch_down_deg == pytest.approx(52.0)               # moderate, NOT 90 (nadir)
+
+
+def test_nadir_baseline_still_selectable():
+    """The 90° nadir baseline is a selectable fallback (use_nadir_search → 90)."""
+    from mission.mission.phase2_search import vantage_patrol
+    w = fpx.FakeWorld()
+    w.pads = []
+    w.rovers = []
+    d, _s = _drone_at(w, 2.0, 2.0)
+    vantage_patrol(d, _uwb(w), 0, [{"xy": (4.0, 2.0)}], lambda: False,
+                   gimbal_deg=90.0, dwell_s=0.3, rate_hz=20.0, sleep=lambda _x: None)
+    assert d.pitch_down_deg == pytest.approx(90.0)
