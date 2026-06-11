@@ -301,11 +301,14 @@ def search_pitch_deg(cfg) -> float:
     return 90.0 if cfg.camera.use_nadir_search else cfg.camera.search_pitch_deg
 
 
-def r2_phase2_kwargs(cfg, *, graph=None, footprints=(), bounds=None) -> dict:
-    """Phase-2 search/read kwargs for the MOVING-GIMBAL arena (R2): held search pitch, a body
-    presence detector (so a drone persists on a seen-but-unread rover), and the persist/orbit
-    budget — all config-driven. Shared by the live runner and the real-sim integration test."""
+def r2_phase2_kwargs(cfg, *, graph=None, footprints=(), bounds=None,
+                     evidence_dir="logs/evidence") -> dict:
+    """Phase-2 search/read kwargs for the MOVING-GIMBAL arena (R2 + R4): held search pitch, a
+    body presence detector (so a drone persists on a seen-but-unread rover), the persist/orbit
+    budget, and the **R4 evidence writer** (one annotated PNG per banked id + a gallery) — all
+    config-driven. Shared by the live runner and the real-sim integration test."""
     from mission.perception.detector import ClassicalRoverDetector
+    from mission.perception.evidence import EvidenceWriter
     return {
         "gimbal_deg": search_pitch_deg(cfg),
         "graph": graph,
@@ -316,6 +319,7 @@ def r2_phase2_kwargs(cfg, *, graph=None, footprints=(), bounds=None) -> dict:
         "orbit_step_m": cfg.search.orbit_step_m,
         "max_orbits": cfg.search.max_orbits,
         "presence_min_area_px": cfg.search.presence_min_area_px,
+        "evidence": EvidenceWriter(evidence_dir),     # R4: judge deliverable, one PNG per id
     }
 
 
@@ -362,7 +366,8 @@ def _report(cfg, mission, pad_coords, plan, land_xy, footprints, rover_ids):
     print("\n".join(lines), flush=True)
 
 
-def _run(cfg, *, real, sleep, cycles, dwell, rover_ids, use_dola=False, log=print) -> int:
+def _run(cfg, *, real, sleep, cycles, dwell, rover_ids, use_dola=False,
+         evidence_dir="logs/evidence", log=print) -> int:
     """Discover+connect, UWB (cage origin), Phase 1 land, Phase 2 search — landing every
     drone in a `finally`, holding on UWB dropout, Ctrl-C → abort-and-land. Returns 0."""
     import time
@@ -384,7 +389,8 @@ def _run(cfg, *, real, sleep, cycles, dwell, rover_ids, use_dola=False, log=prin
                      "rover_ids": rover_ids,                        # allow-list (config)
                      "dictionary": cfg.aruco.dictionary,
                      **r2_phase2_kwargs(cfg, graph=graph,           # held search pitch + gimbal
-                                        footprints=footprints, bounds=bounds)}   # persistence
+                                        footprints=footprints, bounds=bounds,
+                                        evidence_dir=evidence_dir)}   # persistence + R4 evidence
     mission = Mission(cfg, plan, drones=drones, uwb=uwb, streams=streams,
                       pad_coords=pad_coords, footprints=footprints,
                       all_rover_ids=rover_ids, intrinsics=intr, sleep=sleep,
@@ -411,6 +417,13 @@ def _run(cfg, *, real, sleep, cycles, dwell, rover_ids, use_dola=False, log=prin
             pass
         for d in drones.values():
             sdk_compat.release(d)
+    ew = phase2_kwargs.get("evidence")               # R4: rebuild the final gallery from state
+    if ew is not None:
+        try:
+            idx = ew.gallery(mission.state.evidence())
+            log(f"[main] evidence: {mission.state.count()} annotated capture(s) + gallery → {idx}")
+        except Exception as exc:
+            log(f"[main] evidence gallery failed: {exc!r}")
     _report(cfg, mission, pad_coords, plan, land_xy, footprints, rover_ids)
     return 0
 

@@ -76,10 +76,10 @@ def test_real_build_passes_uwb_cage_origin(tmp_path):
 # --------------------------------------------------------------------------- #
 # _run end-to-end (lands all, prints status), real mode
 # --------------------------------------------------------------------------- #
-def test_real_run_returns_zero_and_lands(capsys):
+def test_real_run_returns_zero_and_lands(capsys, tmp_path):
     _cage_world()
     rc = _run(load_real_config(), real=True, sleep=NOSLEEP, cycles=0, dwell=0.6,
-              rover_ids=[20])
+              rover_ids=[20], evidence_dir=str(tmp_path / "evidence"))   # don't pollute repo logs/
     assert rc == 0
     out = capsys.readouterr().out
     assert "REAL hardware" in out
