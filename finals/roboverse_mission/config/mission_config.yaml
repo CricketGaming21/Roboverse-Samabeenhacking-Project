@@ -34,29 +34,42 @@ planner:
   arena_truth_file: config/arena_truth.yaml   # crates+arena emitted by the sim (emit_arena_truth); Discord coords play this role on the day
   inflate_m: 0.40            # crate footprint inflation = drone half-width + UWB + overshoot + barrier margin
   separation_min_m: 0.8      # inter-drone lateral separation (horizontal deconfliction)
+  pad_approach_inflate_m: 0.20   # reduced margin for a pad hard against a thin arch post (sim pad 11
+                             # sits 0.4 m from a post): final approach/departure stays raw-clear, no overfly
 
 aruco:
-  # [RECONCILED vs sim] dict/pads/ids/speed/camera all match finals/sim sim_config.yaml.
-  dictionary: DICT_6X6_250   # [TO CONFIRM on sample pad]
+  # [SYNC-WITH-SIM] the sim now mirrors the REAL event exactly (DICT_7X7_1000 + real ids).
+  # Detection is an ALLOW-LIST: bank only ids in rover_ids.
+  dictionary: DICT_7X7_1000  # real-event dictionary (matches real flight)
   min_marker_px: 40          # apparent side to count a read
-  pad_ids: [10, 11, 12, 13, 14]   # [SYNC-WITH-SIM] pads (validity announced on the day)
-  # rover ids are NOT enumerated here on purpose: opponent rovers carry DIFFERENT ids.
-  # Rule: any decoded marker whose id is NOT in pad_ids is a rover.
+  rover_ids: [11, 45, 51, 67, 101]   # autonomous 11/45/51 + evasive 67/101 (pads carry NO marker)
 
 camera:
   width: 640
   height: 480
   h_fov_deg: 71.0            # [TO CONFIRM on the real drone]
-  search_gimbal_deg: 60      # forward-tilt for low-altitude search (test 30-60); 90 = straight down
-  read_gimbal_deg: 90
+  search_gimbal_deg: 60      # legacy (unused) — superseded by search_pitch_deg
+  read_gimbal_deg: 90        # legacy (unused) — R2 reads at the same moderate pitch, NOT nadir
+  search_pitch_deg: 52       # R2: moderate forward tilt held for search AND read (0=fwd, 90=nadir).
+                             # Do NOT steepen to nadir — the gimbal marker faces any yaw; a side
+                             # marker is lost at nadir. Offset + this tilt keeps it in the cone.
+  use_nadir_search: false    # baseline fallback: set true to search/read straight down (90°)
 
-pads:                        # [SYNC-WITH-SIM] coords come from Discord on the day; validity announced
-  # id, arena (north,east) m, valid + designated. Part-1 scores only valid AND designated pads.
-  - { id: 10, north: 8.5, east: 3.0, valid: true,  designated: true  }   # top "Land"
-  - { id: 11, north: 5.5, east: 4.8, valid: true,  designated: true  }   # right "Land"
-  - { id: 12, north: 2.0, east: 4.5, valid: true,  designated: true  }   # bottom-right "Land"
-  - { id: 13, north: 5.5, east: 1.2, valid: false, designated: false }   # left-mid INVALID
-  - { id: 14, north: 2.0, east: 1.5, valid: true,  designated: false }   # valid, not designated
+search:                      # R2 persistence on a seen-but-unread (out-of-cone) rover
+  persist_timeout_s: 9.0     # hold past one full gimbal sweep (~8 s @ 45°/s) before a light orbit
+  orbit_step_m: 0.6          # light lateral strafe to change bearing (≤ cruise; lateral, no overfly)
+  max_orbits: 2              # orbit attempts before releasing a stubborn target
+  presence_min_area_px: 500  # min rover-body blob area (px) to treat as a presence to persist on
+
+pads:                        # [SYNC-WITH-SIM] these are the SIM's landing zones (mirror the sim's
+  # sim_config.yaml landing_zones / arena_truth.yaml). They are SIM coords for sim testing ONLY.
+  # The REAL-day pad coords come from Discord and live in config/mission_real.yaml — do NOT copy
+  # these sim coords there. id, arena (north,east) m. Part-1 scores only valid AND designated pads.
+  - { id: 11,  north: 4.40, east: 1.35, valid: true,  designated: true  }   # sim "Land"
+  - { id: 45,  north: 7.85, east: 1.30, valid: true,  designated: true  }   # sim "Land"
+  - { id: 51,  north: 4.40, east: 4.40, valid: true,  designated: true  }   # sim "Land"
+  - { id: 67,  north: 8.70, east: 1.95, valid: false, designated: false }   # sim INVALID zone
+  - { id: 101, north: 7.85, east: 4.40, valid: false, designated: false }   # sim INVALID zone
 
 landing:
   hoop_tol_m: 0.15           # [TO CONFIRM] measured hoop radius minus UWB margin
@@ -71,3 +84,9 @@ failsafe:
 evader:
   secure_autonomous_first: true   # bank the 3 predictable tags before committing to evaders
   contain_with_chokepoints: true
+
+real:                        # real-hardware init only — NO-OP on the sim (its DroneAPI lacks
+  # these methods, so sdk_compat's hasattr guards skip them). Tunable here so the real day needs
+  # no code change. On the sim these values are read but never reach a SDK call.
+  heartbeat_hz: 10           # send_app_heartbeat keep-alive rate while manual control is active
+  velocity_level: MEDIUM     # firmware speed band for the 0.5 m/s HARD cap (MEDIUM = usable max)

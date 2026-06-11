@@ -42,9 +42,9 @@ planner:
   separation_min_m: 0.8
 
 aruco:
-  dictionary: DICT_6X6_250
+  dictionary: DICT_7X7_1000   # real markers
   min_marker_px: 40
-  pad_ids: [11, 45, 51, 67, 101]   # the real pad ids (pads carry NO markers per R1 — landing is UWB-only)
+  rover_ids: [11, 45, 51, 67, 101]   # the real rover marker ids (pads carry NO markers per R1)
 
 camera:
   width: 640
@@ -53,7 +53,9 @@ camera:
   search_gimbal_deg: 60
   read_gimbal_deg: 90
 
-# The 5 real landing pads (metres, UWB cage frame). designated_pads = the 3 to land on
+# [FROM DISCORD ON THE DAY] — PLACEHOLDER real landing pads (metres, UWB cage frame).
+# These are NOT the sim coords (do not copy mission_config.yaml's sim pads here): overwrite
+# x/y with the organisers' Discord numbers on the day. designated_pads = the 3 to land on
 # (the operator sets the real valid 3 on the day).
 pads:
   11:  { x: 1.35, y: 4.40 }

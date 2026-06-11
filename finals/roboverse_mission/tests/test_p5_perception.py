@@ -1,18 +1,22 @@
-"""P5 — ArUco confirm (multi-marker, tilted, px gate, pad/rover split) + classical
-finder + two_stage_scan seam."""
+"""P5 — ArUco confirm (multi-marker, tilted, px gate, allow-list) + classical finder +
+two_stage_scan seam."""
 
+import cv2
+import numpy as np
 import pytest
 
-from mission.perception.aruco import (confirm_with_aruco, is_pad_id, is_rover_id,
-                                       split_pads_rovers)
+from mission.perception.aruco import confirm_with_aruco, is_rover_id
 from mission.perception.detector import (ClassicalRoverDetector, Detection,
-                                         PlaceholderRoverDetector, two_stage_scan)
+                                         PlaceholderRoverDetector, frame_bgr,
+                                         two_stage_scan)
 from tests.fakes import fake_pyhulax as fpx
 from tests.fakes.fake_pyhulax import CameraPitchMode, Marker
 
 pytestmark = pytest.mark.p5
 
 NOSLEEP = lambda _s: None
+REAL_ROVERS = [11, 45, 51, 67, 101]
+SIM_ROVERS = [20, 21, 22, 23, 24]
 
 
 def _looking_down_drone(world, n, e, alt_cm, pitch_down=90.0, yaw=0.0):
@@ -28,22 +32,51 @@ def _looking_down_drone(world, n, e, alt_cm, pitch_down=90.0, yaw=0.0):
 
 
 # --------------------------------------------------------------------------- #
-# id classification
+# id allow-list (config-driven; NO pad deny-list)
 # --------------------------------------------------------------------------- #
-def test_pad_vs_rover_ids():
-    for i in (10, 11, 12, 13, 14):
-        assert is_pad_id(i) and not is_rover_id(i)
-    for i in (20, 24, 7, 99, 0):                        # ANY non-pad id = rover
-        assert is_rover_id(i) and not is_pad_id(i)
+def test_is_rover_id_is_an_allow_list():
+    # real profile: id 11 is a ROVER (was wrongly excluded by the old 10–14 pad deny-list)
+    assert is_rover_id(11, REAL_ROVERS) is True
+    assert is_rover_id(10, REAL_ROVERS) is False         # a decoded id NOT in the list is ignored
+    # sim profile: only the listed ids count
+    assert is_rover_id(20, SIM_ROVERS) is True
+    assert is_rover_id(11, SIM_ROVERS) is False
+    assert is_rover_id(99, SIM_ROVERS) is False
 
 
-def test_split_pads_rovers():
-    dets = [Detection((0, 0, 9, 9), 1.0, marker_id=10, source="aruco"),
-            Detection((0, 0, 9, 9), 1.0, marker_id=23, source="aruco"),
-            Detection((0, 0, 9, 9), 1.0, marker_id=99, source="aruco")]
-    pads, rovers = split_pads_rovers(dets)
-    assert {d.marker_id for d in pads} == {10}
-    assert {d.marker_id for d in rovers} == {23, 99}
+def test_detector_is_dictionary_agnostic():
+    # same confirm logic decodes both the sim and real dictionaries
+    for dname in ("DICT_6X6_250", "DICT_7X7_1000"):
+        d = cv2.aruco.getPredefinedDictionary(getattr(cv2.aruco, dname))
+        img = np.full((240, 240, 3), 255, np.uint8)
+        img[20:220, 20:220] = cv2.cvtColor(
+            cv2.aruco.generateImageMarker(d, 11, 200), cv2.COLOR_GRAY2BGR)
+        ids = {x.marker_id for x in confirm_with_aruco(img, dname)}
+        assert 11 in ids                                 # id 11 decodes in both dictionaries
+
+
+# --------------------------------------------------------------------------- #
+# frame_bgr — one BGR ndarray for ALL cv2/ArUco/evidence (real .image / sim .to_rgb)
+# --------------------------------------------------------------------------- #
+def test_frame_bgr_handles_real_and_sim_frames():
+    rgb = np.zeros((4, 4, 3), np.uint8)
+    rgb[:, :, 0] = 255                                   # PURE RED in RGB
+
+    class SimFrame:                                      # sim: only .to_rgb()
+        def to_rgb(self):
+            return rgb
+
+    out = frame_bgr(SimFrame())
+    assert out[0, 0, 0] == 0 and out[0, 0, 2] == 255     # red is now in BGR's last channel
+
+    bgr = np.zeros((4, 4, 3), np.uint8)
+    bgr[:, :, 2] = 255                                   # red already in BGR
+
+    class RealFrame:                                     # real SDK: native BGR .image
+        image = bgr
+
+    out2 = frame_bgr(RealFrame())
+    assert np.array_equal(out2, bgr)                     # returned as-is (no swap)
 
 
 # --------------------------------------------------------------------------- #
@@ -53,7 +86,7 @@ def test_confirm_decodes_multiple_markers_in_one_frame():
     w = fpx.FakeWorld(crates=[])
     w.pads = [Marker(10, 4.0, 2.5), Marker(11, 4.0, 3.5)]
     d, s = _looking_down_drone(w, 4.0, 3.0, 150.0)
-    dets = confirm_with_aruco(s.latest_frame.to_rgb())
+    dets = confirm_with_aruco(frame_bgr(s.latest_frame))
     ids = {x.marker_id for x in dets}
     assert {10, 11} <= ids
     for x in dets:
@@ -118,5 +151,5 @@ def test_two_stage_scan_wires_stages_and_confirms_id():
     result = two_stage_scan(s, PlaceholderRoverDetector(), approach=approach, sleep=NOSLEEP)
     assert len(result.candidates) == 1                              # stage 1 proposed a box
     assert 23 in result.confirmed_ids                               # stage 2 confirmed the id
-    assert is_rover_id(23)
+    assert is_rover_id(23, SIM_ROVERS)
     fpx.set_active_world(None)

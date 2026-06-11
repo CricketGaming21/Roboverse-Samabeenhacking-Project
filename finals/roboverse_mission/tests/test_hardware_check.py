@@ -79,11 +79,14 @@ def test_never_commands_motion(world):
 
 def test_prepare_telemetry_is_guarded_and_never_arms(make_drone, drone):
     sdk_compat.prepare_telemetry(drone)          # sim fake lacks the methods → no-op, no raise
+    assert sdk_compat.heartbeat_running(drone) is False
     d = make_drone(0, real_like=True)
     sdk_compat.prepare_telemetry(d)
     assert "set_app_mode:1" in d.real_calls
-    assert "send_app_heartbeat" in d.real_calls
+    assert "send_app_heartbeat" in d.real_calls  # single handshake beat so telemetry flows
     assert "arm" not in d.real_calls             # READ-ONLY: must NOT arm
+    assert "set_velocity_level" not in " ".join(d.real_calls)   # ...nor enter manual control
+    assert sdk_compat.heartbeat_running(d) is False             # ...nor start the heartbeat thread
 
 
 # --------------------------------------------------------------------------- #

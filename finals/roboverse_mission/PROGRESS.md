@@ -19,6 +19,136 @@
 
 **ALL PHASES GREEN — full suite: 174 passed, 1 skipped (the real-sim `integration` test).**
 
+## R4 — Banking: scan-while-transit + bank-and-release + evidence capture — fake gate green (242 passed, 1 skipped)
+Closes the gap where the camera SAW rovers it never BANKED (banking happened only during deliberate
+locks). Banking is now CONTINUOUS and the single chokepoint, and it produces the judge deliverable
+(one annotated capture per rover + a gallery). TDD, one commit per change, full fake suite green
+throughout; **Phase-1 landing untouched** (still 3/3, 1–2 cm); **R2 gimbal persistence preserved**
+(mission OWN tally held at **5/5** — see the regression note); **public pyhulax surface unchanged**.
+- **Evidence provenance + writer** (commit `cee9a0e`): `MissionState.Evidence` gains `drone_id` +
+  `path`; `bank()` takes them keyword-only (legacy 4-positional calls unchanged), `set_path` attaches
+  the PNG after the de-dup confirms a NEW id. New `perception/evidence.py`: `caption_for`
+  (`drone <k> · t=<s> · (n,e) m`), `annotate` (high-contrast box + `ID <n>` pill + caption strip,
+  never mutates the source frame), `EvidenceWriter` (one `rover_<id>.png` per id + a dark-theme
+  `index.html` contact-sheet gallery). `logs/evidence/` gitignored as a runtime deliverable.
+- **ScanBanker — scan-while-transit + bank-and-release** (commit `05909ba`): a `ScanBanker` runs on
+  EVERY frame — during the vantage HOPS (new `vantage_patrol(on_frame=…)` hook) AND the dwells —
+  banking a distinct rover the instant it clears the gate (≥40 px, fully in-frame, in-zone) on **5
+  CONSECUTIVE frames seen by the same drone**, with NO deliberate dwell-lock (so a drone banks a rover
+  it resolves while flying). Bank-and-release: an already-banked id is ignored (no re-lock/re-bank/
+  dwell — its streak is dropped); on a bank the camera returns to the search pitch. `lock_and_tag` is
+  kept only to centre a marginal/edge read; it and `persist_and_read` route their bank through the
+  banker so evidence + provenance + camera-release are uniform. Transit scanning is motion-passive.
+- **Runtime wiring** (commit `b20f2dd` + clock fix): `r2_phase2_kwargs` builds the `EvidenceWriter`;
+  `_run` rebuilds the final gallery + logs the capture count, and feeds an ELAPSED-seconds `clock` so
+  captions read `t=<s>` (not the raw epoch).
+- **R2-persistence regression FIXED** (commit `f51b4f7`): the first two convoy runs stalled at 4/5
+  (id 67 never banked). Cause: the rewrite gated the persist path on `not out.in_view`, but in_view
+  includes ALREADY-BANKED ids — a banked marker sharing the frame skipped persist; and
+  `persist_and_read` bailed its hold the instant the only DECODABLE marker was a banked one. Fixed to
+  R2's semantics (persist iff no UNBANKED in-zone decodable rover): drop the in_view gate; carry
+  decoded bboxes so `_nearest_presence` excludes a banked-marker blob; keep framing the unread body
+  until its marker sweeps in. Two regression tests lock it.
+- **Bounded persistence — never an unbounded wait** (commit `aa44343`): a rover permanently out of
+  cone / out of the ~1.25 m off-axis read range used to be re-persisted every dwell frame. Now: a
+  hard `persist_timeout_s` per hold → light-orbit fallback (change bearing); after `max_orbits` the
+  rover is **RELEASED** as a target (its xy is remembered; never re-held — the decode path still
+  banks it free if its marker ever shows); a hard **Phase-2 wall-clock cap** (`failsafe.phase2_budget_s`
+  = 180 s, injectable `now`, env override `HULA_PHASE2_BUDGET_S`) stops the whole search so the
+  mission ALWAYS terminates and lands all in `finally`. Tests: a tiny-marker (unreadable) rover times
+  out → orbits → is released → the run completes within the cap and is never banked (overhead variant
+  too). The integration command is itself wrapped in a shell `timeout` so a run can never hang.
+
+**Real-sim convoy integration (gimbal ON, convoy roster, `python -m mission.runtime.main`):**
+- LandingScorer **3/3 in-hoop** (drones → pads 11/51/45 @ 1–2 cm SCORED).
+- **Mission's OWN distinct-id tally: 5/5** `[11,45,51,67,101]` — every rover banked by the mission's
+  own ScanBanker (proven by 5 distinct `logs/evidence/rover_<id>.png`, each written ONLY on a
+  mission-side bank). Referee independently scored **5/5**; the sim ended the ambush EARLY at t=82.5 s.
+  drone 0 banked 67 & 51; drone 1 banked 11, 45, 101.
+- **0 compliance flags** (ComplianceMonitor `enabled`; `logs/compliance/compliance.log` appends-on-
+  violation and stayed untouched through the run; no compliance line in the run log).
+- **No drone hit RTL.** In the R2 run drone 2 hit battery-RTL mid-Phase-2 (persistence costs battery);
+  here banking finished by t=82.5 s with **no RTL** — direct evidence scan-while-transit relieved the
+  battery pressure R2 introduced (fewer/no long persistence holds).
+- **Evidence deliverable:** `logs/evidence/` holds one clean annotated 640×480 capture per banked id
+  (green box + `ID <n>` pill + `drone <k> · t=<s> · (n,e) m` caption) + a working dark-theme
+  `index.html` gallery (5 cards).
+- ⚠️ **Note (not a mission bug):** the in-process PyBullet sim exits at C level during episode TEARDOWN
+  (after `phase DONE — score 5`), so the mission's own `_report` stdout line was lost on this run;
+  every number it prints was confirmed independently (sim landing log, the 5 mission-side evidence
+  PNGs, the untouched compliance log). The `finally`-lands-every-drone path is unaffected on real
+  hardware (no PyBullet teardown there).
+
+## R2 — Phase-2 search/read tuned for the MOVING GIMBAL (persistence) — fake gate green (221 passed, 1 skipped)
+The sim models each rover's marker on a gimbal: its facing yaw sweeps (45°/s, 8 s period) and a
+drone DECODES it only within ±60° of the rover→drone bearing — **never from directly overhead**.
+Out of the cone the camera sees the rover BODY but cv2.aruco finds no marker. Last run the mission's
+OWN tally lagged the referee (**2/5**) because lock-on needed 5 *consecutive* decodes but `lock_timeout`
+(6 s) was **shorter than the 8 s sweep** — it gave up before the cone returned. R2 closes that.
+TDD, one commit per change, full fake suite green throughout; **Phase-1 landing path untouched** (still
+3/3 ≤3 cm); **public pyhulax surface unchanged**.
+- **Fake gimbal+body model** (commit `cf60560`): the fake mirrors the sim — sweeping marker yaw +
+  readable cone (overhead→False), and a bright BODY blob when out of cone. OFF by default so the 211
+  existing always-decodable tests are unchanged; R2 tests opt in. New `r2` pytest marker.
+- **Config** (commit `585528e`): `camera.search_pitch_deg` (52, a MODERATE forward tilt held for search
+  AND read — never nadir) + `camera.use_nadir_search` (90° baseline fallback). New `search:` section —
+  `persist_timeout_s` (9 s, past one sweep), `orbit_step_m`, `max_orbits`, `presence_min_area_px`. All
+  defaulted → real profile loads unchanged.
+- **Persistence + held search pitch** (commit `66d3545`): when a drone sees a rover BODY but can't decode
+  (out of cone), `persist_and_read` holds on it at the search pitch — never steepening to nadir — keeping
+  it framed until the sweeping gimbal brings the marker into the cone, then banks. The target stays ACTIVE
+  across ticks (a seen-but-unread rover is not dropped). A **light lateral orbit** (≤ `orbit_step_m`, no
+  overfly, never +up) breaks a stuck hold after the timeout — a fallback, not the primary move.
+  Bank-and-release on an already-banked id. **Projection uses the live camera pitch each frame.** Opt-in
+  via a `presence` detector → p7/p11 (nadir) unchanged. Multi-bearing stays a free bonus (3 disjoint
+  zones) — no pincer logic here (that's P8).
+- **Live wiring** (commit `f409bd4`): `search_pitch_deg()` / `r2_phase2_kwargs()` build the Phase-2 kwargs
+  (held pitch + body-presence detector + persist/orbit budget) from config; the runner and the real-sim
+  integration both use them.
+
+**Real-sim convoy integration (gimbal ON, `python -m mission.runtime.main`, sim scorers authoritative):**
+- LandingScorer **3/3 in-hoop** (pads 11/45/51; mission-side ≤5.7 cm).
+- **Mission's OWN tally: 5/5 distinct rover ids** `[11,45,51,67,101]` — up from **2/5 pre-R2**; the sim
+  ended the ambush early (`phase DONE … score 5` at t=99 s). Referee banked all 5 independently.
+- **0 compliance flags.** No errors; drone 2 hit the battery-RTL failsafe mid-Phase-2 (persistence costs
+  battery) and landed safely — the other two still covered all 5 (count-first conservatism held).
+
+## Sim re-sync to the overhauled hula_sim (SIM profile only — real-day profile untouched) — fake gate green (211 passed, 1 skipped)
+The `hula_sim` was overhauled (new landing zones + arena geometry), so the mission's planner inputs
+were stale and the real-sim convoy landed in empty space. Re-synced the **sim-testing inputs only**;
+`mission_real.yaml` values are untouched (real coords arrive from Discord on the day). TDD, one
+commit per change, full fake suite green throughout.
+- **`load_arena` reads the sim's new `structures:` key** (crates + arch posts) with a `crates:`
+  fallback — one loader for both (commit `2d5b2f3`). Tests cover both keys.
+- **Regenerated `config/arena_truth.yaml`** from the sim's `emit_arena_truth` — new `structures` +
+  `landing_zones`, arena 10×6 (commit `cf56f09`). `test_plan_on_real_arena_truth` retargets to pad 51.
+- **Sim profile pads mirror the sim's landing zones**: 11→(4.40,1.35) 45→(7.85,1.30) 51→(4.40,4.40)
+  valid+designated; 67/101 invalid — clearly commented as **SIM** coords (real = Discord, NOT copied
+  here). `test_p1` valid-pad count 4→3; example plan pad_ids → 11,45,51 (commit `d624fd7`).
+- **`mission_real.yaml` pads marked `# [FROM DISCORD ON THE DAY]` placeholder** — comment only,
+  values unchanged (the real-config test pins them) (commit `b9c0908`).
+- **Compliant pad approach** (commit `3d0fffa`): the sim places designated pad 11 only **0.4 m from
+  an arch post**, so `plan_path(goal=pad)` was inflation-blocked and the route fell back to a straight
+  line that **overflew the raw post** — a compliance flag on Phase-1 ingress AND Phase-2 egress.
+  `plan_path` now admits an endpoint inside the full inflated bubble but clear of a reduced `approach`
+  set: its own incident segments use the reduced margin (a short, raw-clear final approach) while every
+  interior segment stays on full inflation; an endpoint inside the raw obstacle is still refused. New
+  `planner.pad_approach_inflate_m` knob (default 0.20 → real/legacy profiles load unchanged). TDD:
+  ingress, egress, raw-blocked-still-none.
+
+**Real-sim convoy integration (RUN_INTEGRATION=1 + a full `python -m mission.runtime.main` convoy run;
+sim scorers are authoritative):**
+- LandingScorer **3/3 in-hoop** (drones → pads 11/45/51, ≤3 cm sim error).
+- **0 compliance flags** (sim's own compliance referee — was **2** `over_crate` flags at pad 11 before
+  the planner fix; both gone after).
+- **Score 5 — all 5 distinct rover ids banked** by the sim referee (11,45,51,67,101); the sim ended the
+  ambush early at t=181 s (`phase DONE … score 5`).
+- ⚠️ **Observation (not a re-sync regression, flagged for review):** the mission's OWN tally recorded
+  only 2/5 distinct (`[51,67]`). The drones flew the captures (referee scored all 5) but the mission's
+  `lock_and_tag` multi-frame hold is stricter than the referee's single-scan bank, so its self-belief
+  lagged. This is a Phase-2 perception/lock-on tuning matter, orthogonal to the sim re-sync — left for
+  a separate session.
+
 ## Real-hardware enablement (UWB cage) — sim path kept working, fake gate green (203 passed)
 Made the mission flyable on real HULA hardware while leaving the sim path untouched (it still
 loads `mission_config.yaml` + the sim `pyhulax`). TDD, one commit per layer:

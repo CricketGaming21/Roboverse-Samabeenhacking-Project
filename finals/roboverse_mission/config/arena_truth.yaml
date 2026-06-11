@@ -4,47 +4,59 @@
 # loads THIS file (yaml.safe_load) — it must NOT import simcore.
 # Regenerate with:  python -m scripts.emit_arena_truth
 #
-# PROVISIONAL: mirrors sim_config.yaml arena.authored, which is a best
-# estimate from the brief images. Replace with the real Discord numbers.
+# PROVISIONAL: mirrors sim_config.yaml arena.authored — a starting
+# estimate from the arena layout. Replace with the confirmed numbers.
 #
-# Frames: arena (north, east) metres; crate center = footprint centre,
-# size = full footprint [north_m, east_m], height = crate height m.
+# Frames: arena (north, east) m = competition (y, x). structures: center =
+# footprint centre, size = [north_m, east_m], height m (arch gates appear as
+# their two posts). landing_zones: coordinate-only (no marker), with valid.
 arena: {length_m: 10.0, width_m: 6.0, height_m: 3.0}
-crates:
-- center: [5.0, 3.0]
-  size: [0.45, 0.45]
-  height: 0.4
-- center: [5.45, 3.0]
-  size: [0.45, 0.45]
-  height: 0.6
-- center: [5.0, 3.45]
-  size: [0.45, 0.45]
-  height: 0.8
-- center: [4.55, 3.0]
-  size: [0.45, 0.45]
-  height: 1.0
-- center: [5.45, 3.45]
-  size: [0.45, 0.45]
-  height: 1.2
-- center: [7.5, 4.2]
-  size: [0.45, 0.45]
-  height: 0.6
-- center: [7.95, 4.2]
-  size: [0.45, 0.45]
-  height: 1.0
-- center: [4.6, 5.4]
-  size: [0.45, 0.45]
-  height: 0.4
-- center: [5.05, 5.4]
-  size: [0.45, 0.45]
-  height: 0.9
-- center: [3.0, 3.5]
-  size: [0.45, 0.45]
-  height: 0.5
-- center: [3.45, 3.5]
-  size: [0.45, 0.45]
+structures:
+- center: [2.2, 2.33]
+  size: [0.25, 0.16]
   height: 1.1
-archway:
-  corner: [9.0, 5.0]
-  width_m: 1.0
-  height_m: 1.2
+- center: [2.2, 3.07]
+  size: [0.25, 0.16]
+  height: 1.1
+- center: [4.0, 1.33]
+  size: [0.25, 0.16]
+  height: 1.1
+- center: [4.0, 2.07]
+  size: [0.25, 0.16]
+  height: 1.1
+- center: [5.7, 3.43]
+  size: [0.25, 0.16]
+  height: 1.1
+- center: [5.7, 4.17]
+  size: [0.25, 0.16]
+  height: 1.1
+- center: [8.3, 2.13]
+  size: [0.25, 0.16]
+  height: 1.1
+- center: [8.3, 2.87]
+  size: [0.25, 0.16]
+  height: 1.1
+- center: [4.7, 2.3]
+  size: [0.42, 0.42]
+  height: 1.1
+- center: [5.5, 2.3]
+  size: [0.42, 0.42]
+  height: 1.1
+- center: [5.1, 3.1]
+  size: [0.42, 0.42]
+  height: 1.1
+- center: [5.1, 1.55]
+  size: [0.34, 0.34]
+  height: 0.3
+- center: [7.0, 4.0]
+  size: [1.0, 0.42]
+  height: 0.34
+- center: [6.7, 1.7]
+  size: [0.95, 0.46]
+  height: 0.32
+landing_zones:
+- {id: 11, north: 4.4, east: 1.35, valid: true}
+- {id: 45, north: 7.85, east: 1.3, valid: true}
+- {id: 51, north: 4.4, east: 4.4, valid: true}
+- {id: 67, north: 8.7, east: 1.95, valid: false}
+- {id: 101, north: 7.85, east: 4.4, valid: false}

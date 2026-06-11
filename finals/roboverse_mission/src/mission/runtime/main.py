@@ -251,7 +251,10 @@ def build_live_mission(cfg, *, sleep, use_dola=False, real=False):
     bounds = Rect(0.0, 0.0, arena.length_m, arena.width_m)
     footprints = arena.footprint_tuples()
     inflated = inflate(footprints, cfg.planner.inflate_m)
-    graph = build_graph(inflated, bounds)
+    # reduced margin so a pad hard against a thin obstacle (e.g. arch post) is reachable via a
+    # raw-clear final approach; interior routing stays on the full inflation
+    approach = inflate(footprints, cfg.planner.pad_approach_inflate_m)
+    graph = build_graph(inflated, bounds, approach=approach)
     # vantages get EXTRA clearance so UWB noise + lock-on wander can't drift the drone
     # over a crate (ToF altitude-hold over a crate climbs and breaches the altitude cap).
     vant_inflated = inflate(footprints, cfg.planner.inflate_m + 0.3)
@@ -263,7 +266,8 @@ def build_live_mission(cfg, *, sleep, use_dola=False, real=False):
     for tag in sorted(ips):
         d = pyhulax.DroneAPI()
         d.connect(ips[tag])
-        sdk_compat.prepare_manual_control(d, velocity_level=None)
+        sdk_compat.prepare_manual_control(d, velocity_level=cfg.real.velocity_level,
+                                          heartbeat_hz=cfg.real.heartbeat_hz)
         s = d.create_video_stream()      # created now; camera enabled at Phase-2 start (R1)
         drones[tag], streams[tag] = d, s
     uwb = UWBParserThread(x_origin=cfg.uwb.origin_x, y_origin=cfg.uwb.origin_y)
@@ -285,10 +289,39 @@ def build_live_mission(cfg, *, sleep, use_dola=False, real=False):
         path = plan_path(starts[t], pad_by_tag[t], graph)
         routes[t] = path if path else [starts[t], pad_by_tag[t]]
 
-    vantages = overwatch_vantages(bounds, vant_inflated, pad_by_tag)
+    vantages = overwatch_vantages(bounds, vant_inflated, pad_by_tag,
+                                  gimbal_deg=search_pitch_deg(cfg))
     plan = _PlanView(pad_ids, routes, vantages)
     intr = CameraIntrinsics(cfg.camera.width, cfg.camera.height, cfg.camera.h_fov_deg)
-    return drones, streams, uwb, pad_coords, footprints, intr, plan, starts, graph
+    return drones, streams, uwb, pad_coords, footprints, intr, plan, starts, graph, bounds
+
+
+def search_pitch_deg(cfg) -> float:
+    """The held Phase-2 camera pitch: a MODERATE forward tilt for the gimbal, or the 90° nadir
+    baseline when `camera.use_nadir_search` is set (a selectable fallback)."""
+    return 90.0 if cfg.camera.use_nadir_search else cfg.camera.search_pitch_deg
+
+
+def r2_phase2_kwargs(cfg, *, graph=None, footprints=(), bounds=None,
+                     evidence_dir="logs/evidence") -> dict:
+    """Phase-2 search/read kwargs for the MOVING-GIMBAL arena (R2 + R4): held search pitch, a
+    body presence detector (so a drone persists on a seen-but-unread rover), the persist/orbit
+    budget, and the **R4 evidence writer** (one annotated PNG per banked id + a gallery) — all
+    config-driven. Shared by the live runner and the real-sim integration test."""
+    from mission.perception.detector import ClassicalRoverDetector
+    from mission.perception.evidence import EvidenceWriter
+    return {
+        "gimbal_deg": search_pitch_deg(cfg),
+        "graph": graph,
+        "footprints": list(footprints),
+        "bounds": bounds,
+        "presence": ClassicalRoverDetector(min_area_px=cfg.search.presence_min_area_px),
+        "persist_timeout_s": cfg.search.persist_timeout_s,
+        "orbit_step_m": cfg.search.orbit_step_m,
+        "max_orbits": cfg.search.max_orbits,
+        "presence_min_area_px": cfg.search.presence_min_area_px,
+        "evidence": EvidenceWriter(evidence_dir),     # R4: judge deliverable, one PNG per id
+    }
 
 
 def _report(cfg, mission, pad_coords, plan, land_xy, footprints, rover_ids):
@@ -334,13 +367,14 @@ def _report(cfg, mission, pad_coords, plan, land_xy, footprints, rover_ids):
     print("\n".join(lines), flush=True)
 
 
-def _run(cfg, *, real, sleep, cycles, dwell, rover_ids, use_dola=False, log=print) -> int:
+def _run(cfg, *, real, sleep, cycles, dwell, rover_ids, use_dola=False,
+         evidence_dir="logs/evidence", phase_budget_s=None, log=print) -> int:
     """Discover+connect, UWB (cage origin), Phase 1 land, Phase 2 search — landing every
     drone in a `finally`, holding on UWB dropout, Ctrl-C → abort-and-land. Returns 0."""
     import time
 
     log(f"[main] mode: {'REAL hardware' if real else 'sim'} — discovering + connecting…")
-    drones, streams, uwb, pad_coords, footprints, intr, plan, starts, graph = \
+    drones, streams, uwb, pad_coords, footprints, intr, plan, starts, graph, bounds = \
         build_live_mission(cfg, sleep=sleep, use_dola=use_dola, real=real)
 
     pad_ids = plan.pad_assignment()
@@ -352,12 +386,21 @@ def _run(cfg, *, real, sleep, cycles, dwell, rover_ids, use_dola=False, log=prin
         log(f"  drone tag {tag}: connected  UWB={pos}  -> pad {pid} "
             f"@ ({pad[0]:.2f},{pad[1]:.2f})  state=INIT")
 
+    t0 = time.time()                                              # mission start — evidence shows
+    mission_clock = lambda: time.time() - t0                      # ELAPSED s (not the raw epoch)
+    phase2_kwargs = {"budget_cycles": cycles, "dwell_s": dwell, "mopup_extra_cycles": 1,
+                     "rover_ids": rover_ids,                        # allow-list (config)
+                     "dictionary": cfg.aruco.dictionary,
+                     "clock": mission_clock,                       # R4 evidence caption = elapsed s
+                     **r2_phase2_kwargs(cfg, graph=graph,           # held search pitch + gimbal
+                                        footprints=footprints, bounds=bounds,
+                                        evidence_dir=evidence_dir)}   # persistence + R4 evidence
+    if phase_budget_s is not None:                                # else worker uses cfg cap (180 s)
+        phase2_kwargs["phase_budget_s"] = phase_budget_s          # hard Phase-2 wall-clock cap
     mission = Mission(cfg, plan, drones=drones, uwb=uwb, streams=streams,
                       pad_coords=pad_coords, footprints=footprints,
                       all_rover_ids=rover_ids, intrinsics=intr, sleep=sleep,
-                      phase2_kwargs={"budget_cycles": cycles, "dwell_s": dwell,
-                                     "mopup_extra_cycles": 1, "gimbal_deg": 90,
-                                     "graph": graph})    # route Phase-2 hops around crates
+                      phase2_kwargs=phase2_kwargs)
     land_xy = {}
     try:
         landings = mission.run_phase1(parallel=True)
@@ -380,6 +423,13 @@ def _run(cfg, *, real, sleep, cycles, dwell, rover_ids, use_dola=False, log=prin
             pass
         for d in drones.values():
             sdk_compat.release(d)
+    ew = phase2_kwargs.get("evidence")               # R4: rebuild the final gallery from state
+    if ew is not None:
+        try:
+            idx = ew.gallery(mission.state.evidence())
+            log(f"[main] evidence: {mission.state.count()} annotated capture(s) + gallery → {idx}")
+        except Exception as exc:
+            log(f"[main] evidence gallery failed: {exc!r}")
     _report(cfg, mission, pad_coords, plan, land_xy, footprints, rover_ids)
     return 0
 
@@ -399,14 +449,17 @@ def main(argv=None) -> int:
     args = ap.parse_args(argv)
 
     cfg = load_real_config() if args.real else load_config()
-    rover_ids = [int(x) for x in os.environ.get(
-        "HULA_ROVER_IDS", "20,21,22,23,24").split(",")]
+    env_ids = os.environ.get("HULA_ROVER_IDS")           # config-driven; env override optional
+    rover_ids = ([int(x) for x in env_ids.split(",")] if env_ids
+                 else list(cfg.aruco.rover_ids))
     cycles = int(os.environ.get("HULA_PHASE2_CYCLES", "3"))
     dwell = float(os.environ.get("HULA_PHASE2_DWELL_S", "1.0"))
     use_dola = bool(os.environ.get("HULA_USE_DOLA"))
+    budget_env = os.environ.get("HULA_PHASE2_BUDGET_S")  # override the cfg wall-clock cap (e.g. a
+    phase_budget_s = float(budget_env) if budget_env else None   # GPU-slow sim where rtf << 1)
     try:
         return _run(cfg, real=args.real, sleep=time.sleep, cycles=cycles, dwell=dwell,
-                    rover_ids=rover_ids, use_dola=use_dola)
+                    rover_ids=rover_ids, use_dola=use_dola, phase_budget_s=phase_budget_s)
     except KeyboardInterrupt:                         # before the run loop owns it
         print("\n[main] Ctrl-C before launch — exiting.")
         return 1

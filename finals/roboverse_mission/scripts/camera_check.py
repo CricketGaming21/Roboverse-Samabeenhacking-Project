@@ -20,15 +20,19 @@ for _p in (_ROOT, os.path.join(_ROOT, "src")):
     if _p not in sys.path:
         sys.path.insert(0, _p)
 
-from typing import Callable, List, Tuple                            # noqa: E402
+from typing import Callable, List, Sequence, Tuple                  # noqa: E402
 
 from mission.perception.aruco import confirm_with_aruco            # noqa: E402
+from mission.perception.detector import frame_bgr                  # noqa: E402
 
 
 def scan_frames(drone, stream, *, frames: int = 30, dictionary: str = "DICT_6X6_250",
-                sleep: Callable = time.sleep, log: Callable = print) -> List[Tuple[int, int]]:
+                rover_ids: Sequence[int] = (), sleep: Callable = time.sleep,
+                log: Callable = print) -> List[Tuple[int, int]]:
     """Enable video, run cv2.aruco on each frame, print id + side-px. Returns [(id, px), ...].
+    Labels each id against the `rover_ids` ALLOW-LIST (no pad deny-list — a real rover is id 11).
     READ-ONLY — never commands motion."""
+    allow = set(rover_ids)
     drone.set_video_stream(True)
     stream.start()
     seen: List[Tuple[int, int]] = []
@@ -38,12 +42,12 @@ def scan_frames(drone, stream, *, frames: int = 30, dictionary: str = "DICT_6X6_
             log(f"  frame {i:02d}: (no frame yet)")
             sleep(0.1)
             continue
-        dets = confirm_with_aruco(frame.to_rgb(), dictionary)
+        dets = confirm_with_aruco(frame_bgr(frame), dictionary)
         if not dets:
             log(f"  frame {i:02d}: no marker")
         for d in dets:
             side = max(d.bbox[2], d.bbox[3])
-            kind = "pad/exclude" if 10 <= d.marker_id <= 14 else "ROVER"
+            kind = "ROVER (allow-listed)" if d.marker_id in allow else "id not in allow-list"
             log(f"  frame {i:02d}: id {d.marker_id}  {side}px  ({kind})")
             seen.append((d.marker_id, side))
         sleep(0.1)
@@ -62,13 +66,14 @@ def main(argv=None) -> int:
     ap.add_argument("--frames", type=int, default=30)
     args = ap.parse_args(argv)
 
-    dictionary = load_config().aruco.dictionary
+    cfg_aruco = load_config().aruco
+    dictionary, rover_ids = cfg_aruco.dictionary, cfg_aruco.rover_ids
     d = pyhulax.DroneAPI()
     d.connect(args.ip)
     stream = d.create_video_stream()
     print("camera_check — READ-ONLY (no motion). Decoding live frames…\n")
     try:
-        seen = scan_frames(d, stream, dictionary=dictionary)
+        seen = scan_frames(d, stream, dictionary=dictionary, rover_ids=rover_ids)
     finally:
         try:
             stream.stop()

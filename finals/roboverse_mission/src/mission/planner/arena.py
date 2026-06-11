@@ -2,8 +2,13 @@
 `emit_arena_truth`; on the day the Discord coordinate file plays the same role).
 
 Loaded with **`yaml.safe_load` — NEVER imports `simcore`** (HARD invariant #10).
-Frames: arena (north, east) metres; a crate `center` is its footprint centre, `size`
+Frames: arena (north, east) metres; a footprint `center` is its centre, `size`
 is the full footprint `[north_m, east_m]`.
+
+The overhauled sim emits footprints under **`structures:`** (crates + arch posts) plus a
+`landing_zones:` block; older files used **`crates:`**. We read `structures` first and fall
+back to `crates`, so one loader handles both. `landing_zones` are informational here — the
+mission resolves pad coordinates from the config profile, not from this file.
 """
 
 from __future__ import annotations
@@ -46,7 +51,9 @@ def load_arena(path=None) -> Arena:
     data = yaml.safe_load(p.read_text())
     a = data["arena"]
     crates = []
-    for c in data.get("crates", []) or []:
+    # New sim emits `structures:`; older/open-cage files use `crates:`. Read either.
+    footprints = data.get("structures") or data.get("crates") or []
+    for c in footprints:
         cn, ce = c["center"]
         sn, se = c["size"]
         crates.append(Footprint(float(cn), float(ce), float(sn), float(se),

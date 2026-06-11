@@ -128,7 +128,7 @@ class C2Bridge:
             e = ev[mid]
             path = out / f"rover_{mid}.png"
             if e.frame is not None:
-                bgr = cv2.cvtColor(np.asarray(e.frame), cv2.COLOR_RGB2BGR)
+                bgr = np.array(e.frame, copy=True)          # evidence is already BGR (frame_bgr)
                 cv2.putText(bgr, f"id {mid}", (8, 26), cv2.FONT_HERSHEY_SIMPLEX,
                             0.9, (0, 255, 0), 2)
             else:

@@ -258,16 +258,20 @@ def test_full_run_against_real_sim():
     import time
 
     from mission.config import load_config
-    from mission.runtime.main import Mission, build_live_mission
+    from mission.runtime.main import Mission, build_live_mission, r2_phase2_kwargs
 
     cfg = load_config()
-    drones, streams, uwb, pad_coords, footprints, intr, plan, starts, graph = \
+    drones, streams, uwb, pad_coords, footprints, intr, plan, starts, graph, bounds = \
         build_live_mission(cfg, sleep=time.sleep)
     mission = Mission(cfg, plan, drones=drones, uwb=uwb, streams=streams,
                       pad_coords=pad_coords, footprints=footprints,
-                      all_rover_ids=[20, 21, 22, 23, 24], intrinsics=intr,
-                      sleep=time.sleep, phase2_kwargs={"budget_cycles": 1, "dwell_s": 0.8,
-                                                       "graph": graph})
+                      all_rover_ids=cfg.aruco.rover_ids, intrinsics=intr,
+                      sleep=time.sleep,
+                      phase2_kwargs={"budget_cycles": 1, "dwell_s": 0.8,
+                                     "rover_ids": cfg.aruco.rover_ids,
+                                     "dictionary": cfg.aruco.dictionary,
+                                     **r2_phase2_kwargs(cfg, graph=graph,   # gimbal persistence
+                                                        footprints=footprints, bounds=bounds)})
     try:
         mission.run_phase1(parallel=True)
         time.sleep(4.0)                                  # let on_all_landed fire + convoy enter

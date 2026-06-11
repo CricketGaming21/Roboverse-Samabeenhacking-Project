@@ -250,7 +250,7 @@ def test_uwb_deterministic_under_seed(world):
 @pytest.mark.parametrize("name", [
     "set_app_mode", "send_app_heartbeat", "set_velocity_level",
     "stop_manual_control", "arm", "disarm", "disconnect", "get_velocity",
-    "get_drone_id", "enable_battery_failsafe",
+    "get_drone_id", "enable_battery_failsafe", "set_video_resolution",
 ])
 def test_real_only_methods_absent_on_sim_fake(drone, name):
     assert not hasattr(drone, name), f"{name} must be absent (forces sdk_compat)"
@@ -259,6 +259,7 @@ def test_real_only_methods_absent_on_sim_fake(drone, name):
 @pytest.mark.parametrize("name", [
     "set_app_mode", "send_app_heartbeat", "set_velocity_level",
     "stop_manual_control", "arm", "disarm", "disconnect", "get_velocity",
+    "set_video_resolution",
 ])
 def test_real_only_methods_present_on_real_like(make_drone, name):
     d = make_drone(0, real_like=True)

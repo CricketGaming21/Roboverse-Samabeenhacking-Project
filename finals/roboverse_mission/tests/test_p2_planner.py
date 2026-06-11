@@ -5,6 +5,7 @@ import math
 import cv2
 import numpy as np
 import pytest
+import yaml
 
 from mission.planner.arena import load_arena
 from mission.planner.geometry import (Rect, build_graph, inflate, paths_conflict,
@@ -14,6 +15,36 @@ from mission.planner.projection import (CameraIntrinsics, arena_to_pixel,
 from tests.fakes import fake_pyhulax as fpx
 
 pytestmark = pytest.mark.p2
+
+
+# --------------------------------------------------------------------------- #
+# arena_truth loader — reads the sim's `structures:` key (emit_arena_truth)
+# --------------------------------------------------------------------------- #
+def test_load_arena_reads_structures_key(tmp_path):
+    """The overhauled sim emits footprints under `structures:` (crates + arch posts).
+    load_arena must read them as crate footprints so the planner routes around them."""
+    p = tmp_path / "a.yaml"
+    p.write_text(yaml.safe_dump({
+        "arena": {"length_m": 10.0, "width_m": 6.0, "height_m": 3.0},
+        "structures": [{"center": [4.7, 2.3], "size": [0.42, 0.42], "height": 1.1},
+                       {"center": [7.0, 4.0], "size": [1.0, 0.42], "height": 0.34}],
+        "landing_zones": [{"id": 11, "north": 4.4, "east": 1.35, "valid": True}],
+    }))
+    arena = load_arena(p)
+    assert arena.length_m == 10.0 and arena.width_m == 6.0
+    assert arena.footprint_tuples() == [(4.7, 2.3, 0.42, 0.42), (7.0, 4.0, 1.0, 0.42)]
+
+
+def test_load_arena_legacy_crates_key_still_read(tmp_path):
+    """Back-compat: an older arena file using `crates:` (e.g. the open-cage real file)
+    still loads — empty when neither key is present."""
+    p = tmp_path / "a.yaml"
+    p.write_text(yaml.safe_dump({
+        "arena": {"length_m": 11.0, "width_m": 11.0},
+        "crates": [{"center": [5.0, 3.0], "size": [0.45, 0.45], "height": 0.6}],
+    }))
+    arena = load_arena(p)
+    assert arena.footprint_tuples() == [(5.0, 3.0, 0.45, 0.45)]
 
 
 # --------------------------------------------------------------------------- #
@@ -91,12 +122,57 @@ def test_plan_none_when_goal_blocked():
     assert plan_path((1.0, 0.5), (5.0, 3.0), g) is None    # goal inside footprint
 
 
+# --------------------------------------------------------------------------- #
+# pad approach: an endpoint inside the inflated bubble but clear of the RAW
+# footprint (a designated pad hard against a thin arch post) is reachable via a
+# reduced-margin final approach — fixes the over-crate flag on pad ingress/egress.
+# --------------------------------------------------------------------------- #
+def test_plan_to_inflation_blocked_pad_via_reduced_approach():
+    bounds = Rect(0, 0, 10, 6)
+    foot = [(4.0, 1.33, 0.25, 0.16)]            # thin arch post (like the sim's)
+    inflated = inflate(foot, 0.40)              # the pad sits INSIDE this safety bubble
+    approach = inflate(foot, 0.15)              # but OUTSIDE this reduced-margin bubble
+    pad = (4.4, 1.35)                           # designated pad 11, clear of the raw post
+    assert point_blocked(pad, inflated) is True
+    assert point_blocked(pad, approach) is False
+
+    g0 = build_graph(inflated, bounds)          # no approach set → conservative: bails (unchanged)
+    assert plan_path((0.6, 0.6), pad, g0) is None
+
+    g = build_graph(inflated, bounds, approach=approach)
+    path = plan_path((0.6, 0.6), pad, g)
+    assert path is not None and path[-1] == pad
+    for i in range(len(path) - 1):              # every hop clears the reduced footprint
+        assert segment_clear(path[i], path[i + 1], approach)
+
+
+def test_plan_from_inflation_blocked_start_via_reduced_approach():
+    """Phase-2 egress: departing a pad that sits in the inflated bubble still routes out."""
+    bounds = Rect(0, 0, 10, 6)
+    foot = [(4.0, 1.33, 0.25, 0.16)]
+    inflated, approach = inflate(foot, 0.40), inflate(foot, 0.15)
+    g = build_graph(inflated, bounds, approach=approach)
+    path = plan_path((4.4, 1.35), (8.0, 4.0), g)        # pad 11 -> a far vantage
+    assert path is not None and path[0] == (4.4, 1.35)
+    for i in range(len(path) - 1):
+        assert segment_clear(path[i], path[i + 1], approach)
+
+
+def test_plan_raw_blocked_goal_still_none_with_approach():
+    """A goal inside the RAW footprint (truly inside an obstacle) is still refused."""
+    bounds = Rect(0, 0, 10, 6)
+    foot = [(5.0, 3.0, 0.9, 0.9)]
+    g = build_graph(inflate(foot, 0.40), bounds, approach=inflate(foot, 0.15))
+    assert plan_path((1.0, 0.5), (5.0, 3.0), g) is None
+
+
 def test_plan_on_real_arena_truth():
     arena = load_arena()
     bounds = Rect(0, 0, arena.length_m, arena.width_m)
     inflated = inflate(arena.footprint_tuples(), 0.4)
     g = build_graph(inflated, bounds)
-    path = plan_path((0.6, 1.1), (8.5, 3.0), g)
+    # drone start -> designated pad 51 (4.4, 4.4) on the overhauled sim arena
+    path = plan_path((0.6, 1.1), (4.4, 4.4), g)
     _path_is_clear(path, inflated, bounds)
 
 

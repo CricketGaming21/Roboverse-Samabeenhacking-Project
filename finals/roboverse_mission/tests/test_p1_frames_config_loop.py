@@ -1,6 +1,7 @@
 """P1 — config (reject unknown keys) + frames (inverse-consistent) + fly_to_uwb."""
 
 import math
+import time
 
 import pytest
 import yaml
@@ -62,9 +63,31 @@ def test_load_default_config():
     assert cfg.speed.max_mps == 0.5
     assert cfg.speed.cruise_alt_m == pytest.approx(1.10)
     assert len(cfg.pads) == 5
-    assert cfg.aruco.pad_ids == [10, 11, 12, 13, 14]
-    assert len(cfg.valid_pads()) == 4
+    assert cfg.aruco.dictionary == "DICT_7X7_1000"               # sim now mirrors real
+    assert cfg.aruco.rover_ids == [11, 45, 51, 67, 101]          # allow-list (sim == real)
+    assert len(cfg.valid_pads()) == 3                            # sim valid zones: 11,45,51 (67,101 invalid)
+    assert {p.id for p in cfg.designated_pads()} == {11, 45, 51}
     assert cfg.uwb.tag_ids == [0, 1, 2]
+    assert cfg.real.heartbeat_hz == 10.0                        # real-hw init knobs (no-op on sim)
+    assert cfg.real.velocity_level == "MEDIUM"
+
+
+def test_real_defaults_when_section_absent(tmp_path):
+    data = yaml.safe_load(DEFAULT_CONFIG_PATH.read_text())
+    data.pop("real", None)                                      # older profile with no real: block
+    p = tmp_path / "c.yaml"
+    p.write_text(yaml.safe_dump(data))
+    cfg = load_config(p)
+    assert cfg.real.heartbeat_hz == 10.0 and cfg.real.velocity_level == "MEDIUM"
+
+
+def test_real_heartbeat_hz_must_be_positive(tmp_path):
+    data = yaml.safe_load(DEFAULT_CONFIG_PATH.read_text())
+    data["real"]["heartbeat_hz"] = 0
+    p = tmp_path / "c.yaml"
+    p.write_text(yaml.safe_dump(data))
+    with pytest.raises(ValidationError):
+        load_config(p)
 
 
 def test_unknown_key_rejected(tmp_path):
@@ -123,6 +146,54 @@ def test_sim_fake_lacks_all_realonly_methods(drone):
                  "stop_manual_control", "arm", "disarm", "disconnect",
                  "enable_battery_failsafe"):
         assert not hasattr(drone, name)
+
+
+def test_heartbeat_thread_starts_ticks_and_stops_cleanly(make_drone):
+    d = make_drone(0, real_like=True)
+    sdk_compat.prepare_manual_control(d, velocity_level="MEDIUM", heartbeat_hz=100.0)
+    try:
+        assert sdk_compat.heartbeat_running(d) is True
+        n0 = d.real_calls.count("send_app_heartbeat")
+        assert n0 >= 1                                  # synchronous first beat fired immediately
+        time.sleep(0.15)                                # ~15 ticks at 100 Hz
+        assert d.real_calls.count("send_app_heartbeat") > n0   # thread is ticking
+    finally:
+        sdk_compat.release(d)
+    assert sdk_compat.heartbeat_running(d) is False     # release stops + de-registers it
+    n1 = d.real_calls.count("send_app_heartbeat")
+    time.sleep(0.1)
+    assert d.real_calls.count("send_app_heartbeat") == n1   # no beats after release
+
+
+def test_heartbeat_is_guarded_noop_on_sim_fake(drone):
+    # plain fake lacks send_app_heartbeat → NO thread is ever spawned (suite stays green)
+    sdk_compat.prepare_manual_control(drone, velocity_level="MEDIUM", heartbeat_hz=100.0)
+    assert sdk_compat.heartbeat_running(drone) is False
+    sdk_compat.release(drone)                            # clean no-op
+    assert sdk_compat.heartbeat_running(drone) is False
+
+
+def test_velocity_level_name_resolves_to_band(make_drone):
+    d = make_drone(0, real_like=True)
+    # heartbeat_hz=0 → one handshake beat, no thread to leak in this assertion-only test
+    sdk_compat.prepare_manual_control(d, velocity_level="MEDIUM", heartbeat_hz=0.0)
+    assert "set_velocity_level:200" in d.real_calls     # MEDIUM = 200 = the 0.5 m/s band
+    assert sdk_compat.heartbeat_running(d) is False
+    sdk_compat.release(d)
+
+
+def test_start_video_stream_sets_low_res_before_stream_on(make_drone, drone):
+    # real: set_video_resolution must be recorded BEFORE the stream is turned on
+    d = make_drone(0, real_like=True)
+    sdk_compat.start_video_stream(d)
+    res_idx = next(i for i, c in enumerate(d.real_calls)
+                   if c.startswith("set_video_resolution"))
+    on_idx = d.real_calls.index("set_video_stream:True")
+    assert res_idx < on_idx
+    assert d.video_enabled is True
+    # sim: no set_video_resolution surface → just enables the stream, no raise
+    sdk_compat.start_video_stream(drone)
+    assert drone.video_enabled is True
 
 
 # --------------------------------------------------------------------------- #

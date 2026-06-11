@@ -96,6 +96,28 @@ def test_point_in_poly():
     assert point_in_poly((5, 3), box) is False
 
 
+def test_real_profile_banks_id_11_and_ignores_non_listed_id():
+    # Real profile: a rover IS id 11 (was wrongly excluded by the old 10–14 pad deny-list);
+    # a decoded id NOT in rover_ids (here 10) must be ignored. De-dup by id.
+    w = fpx.FakeWorld(crates=[])
+    w.rovers = [Marker(11, 5.0, 3.0, size_m=0.2), Marker(10, 5.0, 3.4, size_m=0.2)]
+    fpx.set_active_world(w)
+    d = fpx.FakeDroneAPI(w)
+    d.connect(w.ip_map[0])
+    d.takeoff(110)
+    u = fuwb.FakeUWBParserThread(world=w)
+    s = d.create_video_stream(); d.set_video_stream(True); s.start()
+    st, tb = MissionState(), TaskBoard()
+    banked = phase2_search(d, u, 0, [{"xy": (5.0, 3.0), "gimbal_deg": 90, "dwell_s": 0.8}],
+                           s, st, tb, bubble=None, all_ids=[11, 45, 51, 67, 101],
+                           rover_ids=[11, 45, 51, 67, 101], dictionary="DICT_6X6_250",
+                           budget_cycles=1, mopup_extra_cycles=0, intrinsics=INTR, sleep=NOSLEEP)
+    assert 11 in st.tagged()                # id 11 banked — NOT excluded as a "pad"
+    assert 10 not in st.tagged()            # id 10 not in the allow-list → ignored
+    assert st.count() == 1                  # distinct / de-duped
+    fpx.set_active_world(None)
+
+
 def test_bubble_gate_logs_but_does_not_tag_out_of_zone():
     w = fpx.FakeWorld(crates=[])
     w.rovers = [Marker(21, 5.0, 3.0, size_m=0.20)]          # at e=3, OUTSIDE the e≤2 bubble

@@ -40,6 +40,12 @@ def test_real_profile_drones_are_tag_only():
     assert cfg.ip_for_tag() == {}                        # IPs Dola-discovered, not configured
 
 
+def test_real_profile_aruco_dictionary_and_allow_list():
+    cfg = load_real_config()
+    assert cfg.aruco.dictionary == "DICT_7X7_1000"
+    assert cfg.aruco.rover_ids == [11, 45, 51, 67, 101]   # real rover markers (id 11 included)
+
+
 def test_real_profile_safety_values():
     cfg = load_real_config()
     assert cfg.speed.max_mps == 0.5

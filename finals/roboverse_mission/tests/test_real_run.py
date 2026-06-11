@@ -34,7 +34,7 @@ def _cage_world():
 def test_real_build_wiring_and_lands_3of3():
     w = _cage_world()
     cfg = load_real_config()
-    (drones, streams, uwb, pad_coords, footprints, intr, plan, starts, graph) = \
+    (drones, streams, uwb, pad_coords, footprints, intr, plan, starts, graph, bounds) = \
         build_live_mission(cfg, sleep=NOSLEEP, real=True)
     assert sorted(drones) == [0, 1, 2]                       # discovered + connected, in order
     # starts came from UWB (== where the drones physically sit), not config
@@ -76,10 +76,10 @@ def test_real_build_passes_uwb_cage_origin(tmp_path):
 # --------------------------------------------------------------------------- #
 # _run end-to-end (lands all, prints status), real mode
 # --------------------------------------------------------------------------- #
-def test_real_run_returns_zero_and_lands(capsys):
+def test_real_run_returns_zero_and_lands(capsys, tmp_path):
     _cage_world()
     rc = _run(load_real_config(), real=True, sleep=NOSLEEP, cycles=0, dwell=0.6,
-              rover_ids=[20])
+              rover_ids=[20], evidence_dir=str(tmp_path / "evidence"))   # don't pollute repo logs/
     assert rc == 0
     out = capsys.readouterr().out
     assert "REAL hardware" in out

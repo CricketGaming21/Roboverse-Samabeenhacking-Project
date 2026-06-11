@@ -11,7 +11,7 @@ from pathlib import Path
 from typing import List, Optional
 
 import yaml
-from pydantic import BaseModel, ConfigDict, field_validator
+from pydantic import BaseModel, ConfigDict, Field, field_validator
 
 DEFAULT_CONFIG_PATH = (Path(__file__).resolve().parents[2]
                        / "config" / "mission_config.yaml")
@@ -62,12 +62,16 @@ class PlannerCfg(_Base):
     arena_truth_file: str
     inflate_m: float
     separation_min_m: float
+    # Reduced footprint margin used ONLY for a pad's final approach/departure when the pad sits
+    # inside the full inflated bubble of a thin obstacle (e.g. an arch post). Keeps pad ingress/
+    # egress raw-clear without overflying. Defaults so older/real profiles load unchanged.
+    pad_approach_inflate_m: float = 0.20
 
 
 class ArucoCfg(_Base):
-    dictionary: str
+    dictionary: str             # sim DICT_6X6_250 / real DICT_7X7_1000 (detector is dict-agnostic)
     min_marker_px: int
-    pad_ids: List[int]
+    rover_ids: List[int]        # ALLOW-LIST: bank only these ids (no pad deny-list — a real rover is id 11)
 
 
 class CameraCfg(_Base):
@@ -76,6 +80,21 @@ class CameraCfg(_Base):
     h_fov_deg: float
     search_gimbal_deg: float
     read_gimbal_deg: float
+    # R2 moving-gimbal search/read pitch (DOWN degrees: 0=forward, 90=nadir). A MODERATE
+    # forward tilt held throughout — never steepened to nadir (the marker faces any yaw, so
+    # nadir loses a side-facing marker). `use_nadir_search` restores the 90° baseline (a
+    # selectable fallback). Defaults so older/real profiles load unchanged.
+    search_pitch_deg: float = 52.0
+    use_nadir_search: bool = False
+
+
+class SearchCfg(_Base):
+    """R2 phase-2 persistence: when a drone SEES a rover body but can't decode the marker
+    (out of the gimbal cone), it holds on it until rotation brings the marker into the cone."""
+    persist_timeout_s: float = 9.0      # hold past one full gimbal sweep (~8 s) before orbiting
+    orbit_step_m: float = 0.6           # light lateral strafe to change bearing (≤ cruise, no overfly)
+    max_orbits: int = 2                 # light-orbit attempts before giving up a target
+    presence_min_area_px: int = 500     # min body-blob area to treat as a rover presence
 
 
 class PadCfg(_Base):
@@ -115,6 +134,23 @@ class DiscoveryCfg(_Base):
     use_dola: bool = False      # real day: broadcast-discover IPs via Dola (else config IPs)
 
 
+class RealCfg(_Base):
+    """Real-hardware-only init knobs. The sim's DroneAPI lacks the methods these drive
+    (`send_app_heartbeat`, `set_velocity_level`, …), so they are no-ops on the sim — applied
+    only on hardware via the `runtime/sdk_compat.py` hasattr guards. Defaults so the sim /
+    older profiles load with no `real:` section."""
+    heartbeat_hz: float = 10.0          # manual-control keep-alive rate (send_app_heartbeat thread)
+    velocity_level: str = "MEDIUM"      # firmware band for the 0.5 m/s cap (SLOW/MEDIUM/ZOOM/TURBO
+                                        # all clamp ≤0.5; MEDIUM is the usable max)
+
+    @field_validator("heartbeat_hz")
+    @classmethod
+    def _positive_hz(cls, v: float) -> float:
+        if v <= 0.0:
+            raise ValueError("real.heartbeat_hz must be > 0")
+        return v
+
+
 class MissionConfig(_Base):
     meta: MetaCfg
     frame: FrameCfg
@@ -128,6 +164,8 @@ class MissionConfig(_Base):
     landing: LandingCfg
     failsafe: FailsafeCfg
     evader: EvaderCfg
+    search: SearchCfg = Field(default_factory=SearchCfg)   # R2 gimbal persistence (defaults if absent)
+    real: RealCfg = Field(default_factory=RealCfg)         # real-hardware init (no-op on sim)
     discovery: Optional[DiscoveryCfg] = None    # real day; absent on sim → config-IP discovery
 
     def valid_pads(self) -> List[PadCfg]:

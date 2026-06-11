@@ -117,7 +117,8 @@ class DroneWorker:
         cfg = self.cfg
         lk = _loop_kwargs(cfg)
         try:
-            sdk_compat.prepare_manual_control(self.drone, velocity_level=None)
+            sdk_compat.prepare_manual_control(self.drone, velocity_level=cfg.real.velocity_level,
+                                              heartbeat_hz=cfg.real.heartbeat_hz)
             self._set(WorkerState.TAKEOFF)
             self.drone.takeoff(int(m_to_cm(cfg.speed.cruise_alt_m)))
 
@@ -177,13 +178,17 @@ class DroneWorker:
         try:
             self._set(WorkerState.RELAUNCH)
             if self.drone.get_altitude() < 30.0:           # was landed after phase 1
-                sdk_compat.prepare_manual_control(self.drone, velocity_level=None)
+                sdk_compat.prepare_manual_control(self.drone, velocity_level=cfg.real.velocity_level,
+                                                  heartbeat_hz=cfg.real.heartbeat_hz)
                 self.drone.takeoff(int(m_to_cm(cfg.speed.cruise_alt_m)))
             if stream is not None:                         # camera ON at Phase-2 start
-                self.drone.set_video_stream(True)          # (off during Phase-1 UWB landing)
-                stream.start()
+                sdk_compat.start_video_stream(self.drone)   # real: LOW res first (3 streams);
+                stream.start()                              # (off during Phase-1 UWB landing)
 
             self._set(WorkerState.SEARCH)
+            # Hard Phase-2 wall-clock cap from config (overridable) so the search ALWAYS
+            # terminates — a rover permanently out of cone / out of read range can never hang it.
+            kwargs.setdefault("phase_budget_s", cfg.failsafe.phase2_budget_s)
             banked = phase2_search(
                 self.drone, self.uwb, self.tag_id, vantages, stream, state, taskboard,
                 bubble=bubble, all_ids=all_ids, guard=self.guard,
