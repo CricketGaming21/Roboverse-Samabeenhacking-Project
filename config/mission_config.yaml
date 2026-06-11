@@ -54,6 +54,8 @@ camera:
                              # Do NOT steepen to nadir — the gimbal marker faces any yaw; a side
                              # marker is lost at nadir. Offset + this tilt keeps it in the cone.
   use_nadir_search: false    # baseline fallback: set true to search/read straight down (90°)
+  video_warmup_timeout_s: 15.0   # wait up to this long for the first frame after stream-on
+                                 # (real H.264 negotiation; no-op on sim) before Phase-2 detection
 
 search:                      # R2 persistence on a seen-but-unread (out-of-cone) rover
   persist_timeout_s: 9.0     # hold past one full gimbal sweep (~8 s @ 45°/s) before a light orbit

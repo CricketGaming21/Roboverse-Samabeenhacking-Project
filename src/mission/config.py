@@ -86,6 +86,11 @@ class CameraCfg(_Base):
     # selectable fallback). Defaults so older/real profiles load unchanged.
     search_pitch_deg: float = 52.0
     use_nadir_search: bool = False
+    # Real H.264 stream negotiation can delay the first frame several seconds after
+    # set_video_stream(True). Phase-2 waits up to this long for the first frame before
+    # starting rover detection (so warm-up is not mistaken for "no rovers"). No-op on the
+    # sim (the fake yields a frame immediately). Defaults so older/real profiles load unchanged.
+    video_warmup_timeout_s: float = 15.0
 
 
 class SearchCfg(_Base):

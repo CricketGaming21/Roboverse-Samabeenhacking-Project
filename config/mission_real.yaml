@@ -52,6 +52,7 @@ camera:
   h_fov_deg: 71.0
   search_gimbal_deg: 60
   read_gimbal_deg: 90
+  video_warmup_timeout_s: 15.0   # real H.264 first-frame negotiation can take several seconds
 
 # [FROM DISCORD ON THE DAY] — PLACEHOLDER real landing pads (metres, UWB cage frame).
 # These are NOT the sim coords (do not copy mission_config.yaml's sim pads here): overwrite

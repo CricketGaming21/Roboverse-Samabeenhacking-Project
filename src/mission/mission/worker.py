@@ -15,6 +15,7 @@ from typing import List, Optional, Sequence, Tuple
 from mission.control.uwb_loop import fly_to_uwb
 from mission.frames import m_to_cm
 from mission.mission.phase1_land import land_in_hoop
+from mission.perception.video import wait_for_first_frame
 from mission.planner.geometry import plan_path
 from mission.runtime import sdk_compat
 
@@ -184,6 +185,10 @@ class DroneWorker:
             if stream is not None:                         # camera ON at Phase-2 start
                 sdk_compat.start_video_stream(self.drone)   # real: LOW res first (3 streams);
                 stream.start()                              # (off during Phase-1 UWB landing)
+                # Real H.264 negotiation can take several seconds; wait for the first frame so
+                # search doesn't treat the warm-up gap as "no rovers seen" (no-op on the sim).
+                wait_for_first_frame(stream, timeout_s=cfg.camera.video_warmup_timeout_s,
+                                     sleep=self.sleep)
 
             self._set(WorkerState.SEARCH)
             # Hard Phase-2 wall-clock cap from config (overridable) so the search ALWAYS
