@@ -266,7 +266,8 @@ def build_live_mission(cfg, *, sleep, use_dola=False, real=False):
     for tag in sorted(ips):
         d = pyhulax.DroneAPI()
         d.connect(ips[tag])
-        sdk_compat.prepare_manual_control(d, velocity_level=None)
+        sdk_compat.prepare_manual_control(d, velocity_level=cfg.real.velocity_level,
+                                          heartbeat_hz=cfg.real.heartbeat_hz)
         s = d.create_video_stream()      # created now; camera enabled at Phase-2 start (R1)
         drones[tag], streams[tag] = d, s
     uwb = UWBParserThread(x_origin=cfg.uwb.origin_x, y_origin=cfg.uwb.origin_y)

@@ -687,11 +687,15 @@ class RealLikeFakeDroneAPI(FakeDroneAPI):
     def set_app_mode(self, mode: int) -> CommandResult:
         return self._rec(f"set_app_mode:{mode}")
 
-    def send_app_heartbeat(self) -> CommandResult:
+    def send_app_heartbeat(self, user_mode: int = 1) -> CommandResult:
+        # real signature: send_app_heartbeat(user_mode:int=1)->bool. Record id-free so the
+        # existing membership assertions hold; the heartbeat thread calls this repeatedly.
         return self._rec("send_app_heartbeat")
 
-    def set_velocity_level(self, level: int) -> CommandResult:
-        return self._rec(f"set_velocity_level:{level}")
+    def set_velocity_level(self, level, horizontal_vel: int = 0) -> CommandResult:
+        # real signature: set_velocity_level(level, horizontal_vel:int=0). `level` may be a
+        # VelocityLevel member or its int — record the int so the band is asserted deterministically.
+        return self._rec(f"set_velocity_level:{int(level)}")
 
     def set_yaw_rate_level(self, level: int) -> CommandResult:
         return self._rec(f"set_yaw_rate_level:{level}")

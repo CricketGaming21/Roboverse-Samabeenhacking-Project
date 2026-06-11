@@ -1,6 +1,7 @@
 """P1 — config (reject unknown keys) + frames (inverse-consistent) + fly_to_uwb."""
 
 import math
+import time
 
 import pytest
 import yaml
@@ -145,6 +146,40 @@ def test_sim_fake_lacks_all_realonly_methods(drone):
                  "stop_manual_control", "arm", "disarm", "disconnect",
                  "enable_battery_failsafe"):
         assert not hasattr(drone, name)
+
+
+def test_heartbeat_thread_starts_ticks_and_stops_cleanly(make_drone):
+    d = make_drone(0, real_like=True)
+    sdk_compat.prepare_manual_control(d, velocity_level="MEDIUM", heartbeat_hz=100.0)
+    try:
+        assert sdk_compat.heartbeat_running(d) is True
+        n0 = d.real_calls.count("send_app_heartbeat")
+        assert n0 >= 1                                  # synchronous first beat fired immediately
+        time.sleep(0.15)                                # ~15 ticks at 100 Hz
+        assert d.real_calls.count("send_app_heartbeat") > n0   # thread is ticking
+    finally:
+        sdk_compat.release(d)
+    assert sdk_compat.heartbeat_running(d) is False     # release stops + de-registers it
+    n1 = d.real_calls.count("send_app_heartbeat")
+    time.sleep(0.1)
+    assert d.real_calls.count("send_app_heartbeat") == n1   # no beats after release
+
+
+def test_heartbeat_is_guarded_noop_on_sim_fake(drone):
+    # plain fake lacks send_app_heartbeat → NO thread is ever spawned (suite stays green)
+    sdk_compat.prepare_manual_control(drone, velocity_level="MEDIUM", heartbeat_hz=100.0)
+    assert sdk_compat.heartbeat_running(drone) is False
+    sdk_compat.release(drone)                            # clean no-op
+    assert sdk_compat.heartbeat_running(drone) is False
+
+
+def test_velocity_level_name_resolves_to_band(make_drone):
+    d = make_drone(0, real_like=True)
+    # heartbeat_hz=0 → one handshake beat, no thread to leak in this assertion-only test
+    sdk_compat.prepare_manual_control(d, velocity_level="MEDIUM", heartbeat_hz=0.0)
+    assert "set_velocity_level:200" in d.real_calls     # MEDIUM = 200 = the 0.5 m/s band
+    assert sdk_compat.heartbeat_running(d) is False
+    sdk_compat.release(d)
 
 
 # --------------------------------------------------------------------------- #
