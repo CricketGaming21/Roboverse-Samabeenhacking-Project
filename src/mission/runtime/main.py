@@ -288,10 +288,35 @@ def build_live_mission(cfg, *, sleep, use_dola=False, real=False):
         path = plan_path(starts[t], pad_by_tag[t], graph)
         routes[t] = path if path else [starts[t], pad_by_tag[t]]
 
-    vantages = overwatch_vantages(bounds, vant_inflated, pad_by_tag)
+    vantages = overwatch_vantages(bounds, vant_inflated, pad_by_tag,
+                                  gimbal_deg=search_pitch_deg(cfg))
     plan = _PlanView(pad_ids, routes, vantages)
     intr = CameraIntrinsics(cfg.camera.width, cfg.camera.height, cfg.camera.h_fov_deg)
-    return drones, streams, uwb, pad_coords, footprints, intr, plan, starts, graph
+    return drones, streams, uwb, pad_coords, footprints, intr, plan, starts, graph, bounds
+
+
+def search_pitch_deg(cfg) -> float:
+    """The held Phase-2 camera pitch: a MODERATE forward tilt for the gimbal, or the 90° nadir
+    baseline when `camera.use_nadir_search` is set (a selectable fallback)."""
+    return 90.0 if cfg.camera.use_nadir_search else cfg.camera.search_pitch_deg
+
+
+def r2_phase2_kwargs(cfg, *, graph=None, footprints=(), bounds=None) -> dict:
+    """Phase-2 search/read kwargs for the MOVING-GIMBAL arena (R2): held search pitch, a body
+    presence detector (so a drone persists on a seen-but-unread rover), and the persist/orbit
+    budget — all config-driven. Shared by the live runner and the real-sim integration test."""
+    from mission.perception.detector import ClassicalRoverDetector
+    return {
+        "gimbal_deg": search_pitch_deg(cfg),
+        "graph": graph,
+        "footprints": list(footprints),
+        "bounds": bounds,
+        "presence": ClassicalRoverDetector(min_area_px=cfg.search.presence_min_area_px),
+        "persist_timeout_s": cfg.search.persist_timeout_s,
+        "orbit_step_m": cfg.search.orbit_step_m,
+        "max_orbits": cfg.search.max_orbits,
+        "presence_min_area_px": cfg.search.presence_min_area_px,
+    }
 
 
 def _report(cfg, mission, pad_coords, plan, land_xy, footprints, rover_ids):
@@ -343,7 +368,7 @@ def _run(cfg, *, real, sleep, cycles, dwell, rover_ids, use_dola=False, log=prin
     import time
 
     log(f"[main] mode: {'REAL hardware' if real else 'sim'} — discovering + connecting…")
-    drones, streams, uwb, pad_coords, footprints, intr, plan, starts, graph = \
+    drones, streams, uwb, pad_coords, footprints, intr, plan, starts, graph, bounds = \
         build_live_mission(cfg, sleep=sleep, use_dola=use_dola, real=real)
 
     pad_ids = plan.pad_assignment()
@@ -355,14 +380,15 @@ def _run(cfg, *, real, sleep, cycles, dwell, rover_ids, use_dola=False, log=prin
         log(f"  drone tag {tag}: connected  UWB={pos}  -> pad {pid} "
             f"@ ({pad[0]:.2f},{pad[1]:.2f})  state=INIT")
 
+    phase2_kwargs = {"budget_cycles": cycles, "dwell_s": dwell, "mopup_extra_cycles": 1,
+                     "rover_ids": rover_ids,                        # allow-list (config)
+                     "dictionary": cfg.aruco.dictionary,
+                     **r2_phase2_kwargs(cfg, graph=graph,           # held search pitch + gimbal
+                                        footprints=footprints, bounds=bounds)}   # persistence
     mission = Mission(cfg, plan, drones=drones, uwb=uwb, streams=streams,
                       pad_coords=pad_coords, footprints=footprints,
                       all_rover_ids=rover_ids, intrinsics=intr, sleep=sleep,
-                      phase2_kwargs={"budget_cycles": cycles, "dwell_s": dwell,
-                                     "mopup_extra_cycles": 1, "gimbal_deg": 90,
-                                     "graph": graph,      # route Phase-2 hops around crates
-                                     "rover_ids": rover_ids,            # allow-list (config)
-                                     "dictionary": cfg.aruco.dictionary})
+                      phase2_kwargs=phase2_kwargs)
     land_xy = {}
     try:
         landings = mission.run_phase1(parallel=True)

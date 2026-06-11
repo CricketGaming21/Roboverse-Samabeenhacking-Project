@@ -34,7 +34,7 @@ def _cage_world():
 def test_real_build_wiring_and_lands_3of3():
     w = _cage_world()
     cfg = load_real_config()
-    (drones, streams, uwb, pad_coords, footprints, intr, plan, starts, graph) = \
+    (drones, streams, uwb, pad_coords, footprints, intr, plan, starts, graph, bounds) = \
         build_live_mission(cfg, sleep=NOSLEEP, real=True)
     assert sorted(drones) == [0, 1, 2]                       # discovered + connected, in order
     # starts came from UWB (== where the drones physically sit), not config
