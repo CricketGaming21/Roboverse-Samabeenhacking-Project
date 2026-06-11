@@ -24,6 +24,7 @@ from simcore.registry import get_registry, shutdown_registry
 def _cfg(**over):
     c = load_config("sim_config.yaml")
     c.meta.real_time_factor = 10.0
+    c.rovers.gimbal.enabled = False  # marker always faces drone (gimbal tested in phase36)
     c.arena.layout = "procedural"
     c.arena.obstacles.count = 0
     c.rovers.motion = "patrol"

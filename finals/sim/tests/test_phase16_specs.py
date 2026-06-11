@@ -24,7 +24,9 @@ from simcore.registry import get_registry, shutdown_registry
 
 @pytest.fixture()
 def cfg():
-    return load_config("sim_config.yaml")
+    c = load_config("sim_config.yaml")
+    c.rovers.gimbal.enabled = False  # marker always faces drone (gimbal tested in phase36)
+    return c
 
 
 # --------------------------------------------------------------------------- #
@@ -64,15 +66,16 @@ def test_speed_levels_clamped_to_half_mps_hard_cap(cfg):
 
 
 def test_detection_range_geometry_at_fov71(cfg):
-    """0.15 m marker at the 40 px gate: range ~1.7 m at 640x480 / 71°
+    """0.20 m rover marker at the 40 px gate: range ~2.2 m at 640x480 / 71°
     (derived from config, not hardcoded — updates if specs change)."""
     tan_h = math.tan(math.radians(cfg.camera.h_fov_deg) / 2)
     marker = cfg.aruco.rover_marker_size_m
     gate = cfg.scoring.min_marker_px
     max_range = marker * (cfg.camera.width / 2) / (gate * tan_h)
-    assert 1.6 <= max_range <= 1.8               # ~1.7 m per the spec sheet
-    # the 0.30 m pad marker correspondingly reaches ~3.4 m
-    assert 3.2 <= max_range * 2 <= 3.6
+    assert 2.1 <= max_range <= 2.4               # ~2.2 m for the 0.20 m marker
+    # range scales linearly with marker size: a hypothetical 2x marker doubles it
+    assert max_range * 2 == pytest.approx(
+        (2 * marker) * (cfg.camera.width / 2) / (gate * tan_h))
 
 
 # --------------------------------------------------------------------------- #

@@ -41,6 +41,8 @@ class WorldBodies:
     drones: tuple
     rovers: tuple
     pads: tuple
+    rover_markers: tuple = ()   # per rover: (marker_link_index, aruco_texture_id)
+    blank_marker: int = -1      # solid-grey texture that HIDES a marker (gimbal)
 
     @property
     def total(self) -> int:
@@ -166,7 +168,9 @@ def _make_rover(client, cfg, pose, marker_id) -> int:
                            physicsClientId=client)
     p.changeVisualShape(body, marker_link, textureUniqueId=marker,
                         physicsClientId=client)
-    return body
+    # marker_link + texture are returned so the gimbal gating (registry) can
+    # show/hide this rover's marker per drone-camera render.
+    return body, marker_link, marker
 
 
 def _make_pad(client, cfg, pad) -> int:
@@ -222,11 +226,16 @@ def build(client: int, cfg, layout) -> WorldBodies:
                          f"{n_rovers} rovers")
     if len(set(marker_ids[:n_rovers])) != n_rovers:
         raise ValueError(f"rover marker ids must be unique: {marker_ids}")
-    rovers = tuple(
+    rover_built = [
         _make_rover(client, cfg, pose, marker_ids[i])
-        for i, pose in enumerate(layout.rover_starts))
+        for i, pose in enumerate(layout.rover_starts)]
+    rovers = tuple(b[0] for b in rover_built)
+    rover_markers = tuple((b[1], b[2]) for b in rover_built)  # (link, aruco tex)
+    blank_marker = p.loadTexture(aruco_assets.ensure_blank_png(),
+                                 physicsClientId=client)  # gimbal "hidden" tex
 
     pads = tuple(_make_pad(client, cfg, pad) for pad in cfg.pads)
 
     return WorldBodies(floor=floor, walls=walls, obstacles=obstacles,
-                       drones=drones, rovers=rovers, pads=pads)
+                       drones=drones, rovers=rovers, pads=pads,
+                       rover_markers=rover_markers, blank_marker=blank_marker)

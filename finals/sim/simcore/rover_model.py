@@ -153,6 +153,17 @@ class SimRover:
         self._teleop = None               # (v_north, v_east) m/s, or None
         self._teleop_until = 0.0
 
+        # Moving gimbal: the marker's facing yaw sweeps from a seeded per-rover
+        # phase; a drone decodes the marker only inside the readable cone.
+        gb = cfg.rovers.gimbal
+        self._gimbal_on = bool(gb.enabled)
+        self._gimbal_sweep = math.radians(float(gb.sweep_deg_per_s))
+        self._gimbal_half = math.radians(float(gb.readable_halfangle_deg))
+        self._gimbal_phase = float(np.random.default_rng(
+            [cfg.meta.seed, 5000 + index]).uniform(0.0, 2.0 * math.pi))
+        self._marker_link = None          # set by the registry after world build
+        self._marker_tex = None           # the ArUco texture id for the marker
+
         if self._personality == "convoy":
             cv = cfg.rovers.convoy
             if cv.loiter not in _LOITER_MODES:
@@ -192,6 +203,37 @@ class SimRover:
         thread) so an evasive rover can find the nearest pursuer. No-op for
         the other personalities."""
         self._drones = drones
+
+    def bind_marker(self, link_index, texture_id) -> None:
+        """Record this rover's marker link + ArUco texture (the registry sets
+        these after world build) so the gimbal gating can show/hide it."""
+        self._marker_link = link_index
+        self._marker_tex = texture_id
+
+    # ------------------------------------------------------------------ #
+    # Moving-gimbal marker model (read on the sim thread)
+    # ------------------------------------------------------------------ #
+
+    def marker_yaw(self, now: float) -> float:
+        """World-frame yaw (rad) the marker is FACING at sim time `now`:
+        a seeded per-rover phase swept at gimbal.sweep_deg_per_s."""
+        return (self._gimbal_phase + self._gimbal_sweep * now) % (2.0 * math.pi)
+
+    def marker_readable_by(self, now: float, drone_world_xy) -> bool:
+        """Can a drone at `drone_world_xy` (world x, y) DECODE this marker now?
+        True when the gimbal facing is within ±readable_halfangle of the
+        horizontal bearing from the rover to the drone. With the gimbal off,
+        always True (the marker is a plain top fiducial)."""
+        if not self._gimbal_on:
+            return True
+        dx = float(drone_world_xy[0]) - float(self.pos[0])
+        dy = float(drone_world_xy[1]) - float(self.pos[1])
+        if math.hypot(dx, dy) < 0.05:     # directly overhead: facing undefined
+            return False                  # must be offset toward the facing
+        bearing = math.atan2(dy, dx)
+        diff = (self.marker_yaw(now) - bearing + math.pi) % (2.0 * math.pi) \
+            - math.pi
+        return abs(diff) <= self._gimbal_half
 
     # ------------------------------------------------------------------ #
     # Scenario staging — SIM THREAD ONLY (called by simcore/scenario.py)

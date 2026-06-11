@@ -26,6 +26,7 @@ def _cfg():
     c.arena.layout = "procedural"
     c.arena.obstacles.count = 0
     c.rovers.count = 0
+    c.rovers.gimbal.enabled = False  # marker always faces drone (gimbal tested in phase36)
     return c
 
 

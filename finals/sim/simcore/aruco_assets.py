@@ -80,6 +80,19 @@ f 1/1/1 3/3/1 4/4/1
 """
 
 
+def ensure_blank_png(out_dir: str = "assets") -> str:
+    """A plain solid-grey texture (no fiducial) used to HIDE a rover marker
+    when its gimbal faces away — the camera then sees a featureless top that
+    cv2.aruco cannot decode. Written once."""
+    path = Path(out_dir) / "marker_blank.png"
+    if not path.is_file():
+        path.parent.mkdir(parents=True, exist_ok=True)
+        img = np.full((32, 32, 3), 150, np.uint8)   # mid-grey, no pattern
+        if not cv2.imwrite(str(path), img):
+            raise RuntimeError(f"failed to write blank texture: {path}")
+    return str(path)
+
+
 def ensure_billboard_png(path: str) -> str:
     """Procedural RoboMaster-style billboard texture for the rover bodies.
 

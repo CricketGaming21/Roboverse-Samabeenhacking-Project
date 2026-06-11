@@ -28,6 +28,7 @@ def cfg():
     c = load_config("sim_config.yaml")
     c.meta.real_time_factor = 10.0
     c.scoring.enabled = False  # referee not under test here
+    c.rovers.gimbal.enabled = False  # marker always faces drone (gimbal tested in phase36)
     c.motion.realistic = False  # crisp snap motion: exact geometry under test
     c.arena.layout = "procedural"  # authored map off: clean sight lines
     c.arena.obstacles.count = 0

@@ -347,6 +347,21 @@ class MixedConfig:
 
 
 @dataclass
+class GimbalConfig:
+    """Each rover's ArUco marker sits on a MOVING GIMBAL: its facing yaw sweeps
+    over time (sweep_deg_per_s) from a seeded per-rover phase. A drone can only
+    DECODE the marker when the gimbal's facing is within ±readable_halfangle_deg
+    of the horizontal bearing from the rover to that drone; outside the cone the
+    camera sees the rover body but cv2.aruco finds no marker (the marker is
+    hidden in the rendered frame, per-drone). Deterministic via meta.seed. ON
+    by default for convoy AND mixed so the mission's marker-reading is tested
+    honestly."""
+    enabled: bool = True
+    sweep_deg_per_s: float = 45.0      # marker facing rotation rate
+    readable_halfangle_deg: float = 60.0  # ±cone within which a drone can decode
+
+
+@dataclass
 class RoversConfig:
     count: int = 5
     marker_ids: list = field(default_factory=lambda: [11, 45, 51, 67, 101])
@@ -355,6 +370,7 @@ class RoversConfig:
     convoy: ConvoyConfig = field(default_factory=ConvoyConfig)
     patrol: PatrolConfig = field(default_factory=PatrolConfig)
     mixed: MixedConfig = field(default_factory=MixedConfig)
+    gimbal: GimbalConfig = field(default_factory=GimbalConfig)
 
 
 @dataclass

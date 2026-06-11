@@ -201,6 +201,13 @@ rovers:
   motion: convoy           # convoy (fixed scenario routes, DEFAULT)
                            # | patrol (random waypoints — back-compat flag)
                            # | mixed (3 autonomous + 2 evasive; see rovers.mixed)
+  # Moving gimbal: each rover's marker sweeps its facing yaw; a drone decodes it
+  # only when the facing is within ±readable_halfangle_deg of the bearing to
+  # that drone (else the camera sees the body, no marker). ON by default.
+  gimbal:
+    enabled: true
+    sweep_deg_per_s: 45.0   # marker facing rotation rate (seeded per-rover phase)
+    readable_halfangle_deg: 60.0  # ±cone within which a drone can decode
   # Convoy (matches the Phase-2 image): enter from scenario.entrance (SW)
   # staggered, run the shared trunk, split to per-rover winding branches,
   # then loiter. FIXED routes only — no evasion, no reacting to drones.

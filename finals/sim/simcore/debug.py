@@ -175,11 +175,15 @@ class DebugProbe:
                                            self._reg.layout.obstacles),
         }
 
-    def _rover_dict(self, rover):
+    def _rover_dict(self, rover, now, drones):
         wp = None
         if rover._target_w is not None:
             wp = _round3(frames.world_to_arena(
                 self._cfg, rover._target_w[0], rover._target_w[1]))
+        # Moving-gimbal coverage: the marker's facing yaw and WHICH drones can
+        # currently DECODE it (so --dump can diagnose coverage failures).
+        readable_by = [d.index for d in drones
+                       if rover.marker_readable_by(now, (d.pos[0], d.pos[1]))]
         return {
             "index": rover.index,
             "marker_id": rover.marker_id,
@@ -187,6 +191,8 @@ class DebugProbe:
             "arena_ne_m": _round3(rover.arena_position()),
             "world_xy": _round3(rover.pos[:2]),
             "yaw_rad": round(float(rover.yaw), 4),
+            "marker_yaw_deg": round(math.degrees(rover.marker_yaw(now)), 1),
+            "readable_by": readable_by,
             "waypoint_arena_ne_m": wp,   # None while paused
             "pause_until": round(rover._pause_until, 2) if wp is None
             else None,
@@ -289,10 +295,12 @@ class DebugProbe:
         reg = self._reg
 
         def _core():
+            now = reg.clock.now()
             return {
-                "sim_time": round(reg.clock.now(), 4),
+                "sim_time": round(now, 4),
                 "drones": [self._drone_dict(d) for d in reg.drones],
-                "rovers": [self._rover_dict(r) for r in reg.rovers],
+                "rovers": [self._rover_dict(r, now, reg.drones)
+                           for r in reg.rovers],
             }
         snap = reg.run_on_sim_thread(_core)
         snap["referee"] = (self.referee_view() if referee_view

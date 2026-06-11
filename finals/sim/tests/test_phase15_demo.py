@@ -15,6 +15,7 @@ from simcore.config import load_config
 def test_full_demo_runs_both_phases_and_scores():
     cfg = load_config("sim_config.yaml")
     cfg.meta.real_time_factor = 10.0
+    cfg.rovers.gimbal.enabled = False  # full-demo scoring; gimbal tested in phase36
     # Compact episode for the test (config-driven, semantics unchanged):
     cfg.scenario.episode_seconds = 55.0
     cfg.scenario.ambush_seconds = 45.0

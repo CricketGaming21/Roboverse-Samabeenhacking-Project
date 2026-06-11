@@ -27,6 +27,7 @@ def cfg():
     c.scenario.phases = "ambush"     # part-2 referee judges only in AMBUSH
     c.rovers.motion = "patrol"
     c.rovers.patrol.speed_mps = 0.0  # parked: stable read-only comparisons
+    c.rovers.gimbal.enabled = False   # deterministic marker read (gimbal tested in phase36)
     c.motion.realistic = False  # crisp snap motion: exact geometry under test
     return c
 

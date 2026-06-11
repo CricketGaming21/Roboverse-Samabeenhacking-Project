@@ -32,6 +32,7 @@ def _cfg():
     c = load_config("sim_config.yaml")
     c.meta.real_time_factor = 12.0
     c.camera.use_egl = False
+    c.rovers.gimbal.enabled = False  # marker always faces drone (gimbal tested in phase36)
     c.scoring.enabled = False
     c.scenario.phases = "ambush"
     c.rovers.motion = "patrol"

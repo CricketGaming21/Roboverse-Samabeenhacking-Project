@@ -58,6 +58,7 @@ class SimRegistry:
         self.landing_scorer = scoring.LandingScorer(self)  # part-1 referee
         self.compliance = None       # compliance flag logger (set during boot)
         self._auto_recorder = None   # $HULA_SIM_RECORD integration hook
+        self._marker_applied = {}    # rover index -> last-applied marker texture (gimbal)
         self.scenario = None         # episode state machine (set during boot)
         self.renderer = p.ER_TINY_RENDERER  # upgraded if the EGL plugin loads
         self._egl_plugin = -1
@@ -153,11 +154,32 @@ class SimRegistry:
         (live-3D mode) — no getCameraImage, so it cannot freeze a p.GUI."""
         if not self.cameras_enabled:
             return None
-        return self.run_on_sim_thread(
-            lambda: camera.render_rgb(self.client, self.config, drone,
-                                      self.renderer, width=width,
-                                      height=height),
-            timeout=30)
+
+        def _render():
+            self._apply_gimbal_gating(drone)   # show/hide markers for THIS drone
+            return camera.render_rgb(self.client, self.config, drone,
+                                     self.renderer, width=width, height=height)
+        return self.run_on_sim_thread(_render, timeout=30)
+
+    def _apply_gimbal_gating(self, drone) -> None:
+        """Before rendering `drone`'s camera, set each rover's marker texture to
+        the ArUco fiducial when the gimbal is readable BY THIS DRONE, else to a
+        blank texture (the camera then sees the body, no decodable marker).
+        SIM THREAD ONLY. No-op when the gimbal is disabled."""
+        if not self.config.rovers.gimbal.enabled:
+            return
+        now = self.clock.now()
+        dxy = (float(drone.pos[0]), float(drone.pos[1]))
+        for r in self.rovers:
+            if r._marker_link is None:
+                continue
+            tex = (r._marker_tex if r.marker_readable_by(now, dxy)
+                   else self.bodies.blank_marker)
+            if self._marker_applied.get(r.index) != tex:
+                p.changeVisualShape(r.body_id, r._marker_link,
+                                    textureUniqueId=tex,
+                                    physicsClientId=self.client)
+                self._marker_applied[r.index] = tex
 
     def render_arena(self, width: int = None, height: int = None):
         """One (H, W, 3) uint8 RGB frame of a fixed angled-overhead
@@ -348,8 +370,10 @@ class SimRegistry:
             for i, (pose, bid) in enumerate(
                 zip(self.layout.rover_starts, self.bodies.rovers))
         ]
-        for r in self.rovers:             # evasive rovers flee the nearest drone
-            r.bind_drones(self.drones)
+        for r, (link, tex) in zip(self.rovers, self.bodies.rover_markers):
+            r.bind_drones(self.drones)     # evasive rovers flee the nearest drone
+            r.bind_marker(link, tex)       # gimbal show/hide of its marker
+        self._marker_applied = {}          # rover index -> last-applied texture id
         self.compliance = compliance.ComplianceMonitor(self)
         self.scenario = scenario.Scenario(self)
         self.scenario.on_boot()

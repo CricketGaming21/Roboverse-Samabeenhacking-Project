@@ -31,6 +31,7 @@ def _cfg(rtf=10.0):
 
 def _scan_cfg():
     c = _cfg()
+    c.rovers.gimbal.enabled = False  # marker always faces drone (gimbal tested in phase36)
     c.scoring.enabled = False
     c.arena.layout = "procedural"
     c.arena.obstacles.count = 0
