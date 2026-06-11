@@ -26,5 +26,6 @@ markers = [
   "p9: planner GUI export contract",
   "p10: C2 console",
   "p11: full integration + reliability",
+  "r2: phase-2 search/read tuned for the moving gimbal (persistence + search pitch)",
   "integration: requires the REAL sim (run supervised, NOT in the overnight loop)",
 ]

@@ -143,6 +143,7 @@ class Marker:
     z: float = 0.0    # height of the marker plane (m)
     size_m: float = 0.30   # printed marker side (m)
     motion: Optional[Callable[[float], Tuple[float, float]]] = None  # t -> (n,e)
+    gimbal_phase_deg: float = 0.0   # seeded facing-yaw phase (rover gimbal model)
 
     def pos_at(self, t: float) -> Tuple[float, float]:
         if self.motion is not None:
@@ -180,6 +181,15 @@ class FakeWorld:
     cam_h: int = 480
     cam_hfov_deg: float = 71.0
 
+    # moving-gimbal marker model (mirrors the sim: each rover's marker faces a yaw that
+    # sweeps at gimbal_sweep_dps from a per-rover phase; a drone DECODES it only when the
+    # facing is within ±gimbal_half_deg of the rover->drone bearing — and NEVER from directly
+    # overhead. OFF by default so existing always-decodable worlds are unchanged; the R2 tests
+    # (and the real sim) enable it. Out-of-cone, the camera sees the rover BODY but no marker.
+    gimbal_enabled: bool = False
+    gimbal_sweep_dps: float = 45.0
+    gimbal_half_deg: float = 60.0
+
     # onboard-estimate drift (per metre travelled), default 0 for clean tests
     drift_frac: float = 0.0
 
@@ -216,6 +226,27 @@ class FakeWorld:
 
     def all_markers(self) -> List[Marker]:
         return list(self.pads) + list(self.rovers)
+
+    # -- moving-gimbal marker model -------------------------------------- #
+    def marker_yaw(self, mk: Marker) -> float:
+        """World/arena-frame yaw (rad) the marker faces NOW: seeded phase swept at
+        gimbal_sweep_dps (mirrors simcore.rover_model.marker_yaw)."""
+        return (math.radians(mk.gimbal_phase_deg)
+                + math.radians(self.gimbal_sweep_dps) * self.clock) % (2 * math.pi)
+
+    def marker_readable(self, mk: Marker, drone_xy: Tuple[float, float]) -> bool:
+        """Can a drone at arena (n,e) `drone_xy` DECODE this marker now? True iff the gimbal
+        facing is within ±gimbal_half_deg of the rover->drone bearing. Directly overhead the
+        facing is undefined → False (the drone must be offset). Gimbal off → always True."""
+        if not self.gimbal_enabled:
+            return True
+        mn, me = mk.pos_at(self.clock)
+        dn, de = float(drone_xy[0]) - mn, float(drone_xy[1]) - me
+        if math.hypot(dn, de) < 0.05:                 # overhead: facing undefined
+            return False
+        bearing = math.atan2(de, dn)
+        diff = (self.marker_yaw(mk) - bearing + math.pi) % (2 * math.pi) - math.pi
+        return abs(diff) <= math.radians(self.gimbal_half_deg)
 
     def velocity_mps(self, level) -> float:
         """m/s for a VelocityLevel, HARD-clamped to max_mps (every level ≤ 0.5)."""
@@ -269,6 +300,20 @@ def _camera_basis(yaw_rad: float, pitch_down_rad: float):
     return z_cam, x_cam, y_cam
 
 
+def _draw_body(frame: np.ndarray, project, mn: float, me: float, mk: Marker,
+               body_m: float = 0.30, value: int = 240) -> None:
+    """Render the rover's bright chassis (a high-contrast quad, NO decodable marker) at its
+    footprint — what a drone sees when the gimbal has the marker out of the readable cone."""
+    half = body_m / 2.0
+    corners = [(mn + half, me - half), (mn + half, me + half),
+               (mn - half, me + half), (mn - half, me - half)]
+    proj = [project(np.array([c[0], c[1], mk.z])) for c in corners]
+    if any(p is None for p in proj):
+        return
+    pts = np.array([[p[0], p[1]] for p in proj], np.int32)
+    cv2.fillConvexPoly(frame, pts, (value, value, value))
+
+
 def render_frame(world: FakeWorld, drone: "FakeDroneAPI") -> np.ndarray:
     """Render the drone's current camera view as an RGB uint8 ndarray with the
     visible ArUco markers warped onto the floor."""
@@ -296,9 +341,16 @@ def render_frame(world: FakeWorld, drone: "FakeDroneAPI") -> np.ndarray:
     markers = sorted(world.all_markers(),
                      key=lambda m: -((m.pos_at(world.clock)[0] - drone.n) ** 2 +
                                      (m.pos_at(world.clock)[1] - drone.e) ** 2))
+    rover_ids = {id(r) for r in world.rovers}
     for mk in markers:
         mn, me = mk.pos_at(world.clock)
         s = mk.size_m
+        # Moving gimbal: when a rover's marker is out of the readable cone, the camera sees
+        # the rover BODY (a bright chassis blob) but cv2.aruco finds no decodable marker.
+        if (world.gimbal_enabled and id(mk) in rover_ids
+                and not world.marker_readable(mk, (drone.n, drone.e))):
+            _draw_body(frame, project, mn, me, mk)
+            continue
         quiet = 0.25                       # white border fraction (each side)
         pad = s * (1.0 + 2 * quiet)        # white pad incl. quiet zone
         half = pad / 2.0
