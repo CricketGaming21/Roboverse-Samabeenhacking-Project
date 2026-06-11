@@ -26,7 +26,7 @@ def _valid_pad_ids():
 
 
 def _raw():
-    return yaml.safe_load(EXAMPLE.read_text())
+    return yaml.safe_load(EXAMPLE.read_text(encoding="utf-8"))
 
 
 # --------------------------------------------------------------------------- #
@@ -70,7 +70,7 @@ def test_p7_consumes_vantages_inside_bubbles():
 def test_unknown_key_rejected(tmp_path):
     data = _raw()
     data["drones"][0]["surprise"] = 1
-    p = tmp_path / "p.yaml"; p.write_text(yaml.safe_dump(data))
+    p = tmp_path / "p.yaml"; p.write_text(yaml.safe_dump(data), encoding="utf-8")
     with pytest.raises(ValidationError):
         load_mission_plan(p, valid_pad_ids=_valid_pad_ids())
 
@@ -78,7 +78,7 @@ def test_unknown_key_rejected(tmp_path):
 def test_route_through_footprint_rejected(tmp_path):
     data = _raw()
     data["drones"][0]["phase1"]["route_m"] = [[0.6, 1.0], [8.0, 3.0]]   # cuts the crate
-    p = tmp_path / "p.yaml"; p.write_text(yaml.safe_dump(data))
+    p = tmp_path / "p.yaml"; p.write_text(yaml.safe_dump(data), encoding="utf-8")
     with pytest.raises(PlanValidationError):
         load_mission_plan(p, valid_pad_ids=_valid_pad_ids())
 
@@ -86,7 +86,7 @@ def test_route_through_footprint_rejected(tmp_path):
 def test_vantage_outside_bubble_rejected(tmp_path):
     data = _raw()
     data["drones"][0]["phase2"]["vantages"][0]["xy"] = [5.0, 5.0]       # not in drone-0's bubble
-    p = tmp_path / "p.yaml"; p.write_text(yaml.safe_dump(data))
+    p = tmp_path / "p.yaml"; p.write_text(yaml.safe_dump(data), encoding="utf-8")
     with pytest.raises(PlanValidationError):
         load_mission_plan(p, valid_pad_ids=_valid_pad_ids())
 
@@ -94,7 +94,7 @@ def test_vantage_outside_bubble_rejected(tmp_path):
 def test_invalid_pad_rejected(tmp_path):
     data = _raw()
     data["drones"][0]["phase1"]["pad_id"] = 13                         # 13 is announced invalid
-    p = tmp_path / "p.yaml"; p.write_text(yaml.safe_dump(data))
+    p = tmp_path / "p.yaml"; p.write_text(yaml.safe_dump(data), encoding="utf-8")
     with pytest.raises(PlanValidationError):
         load_mission_plan(p, valid_pad_ids=_valid_pad_ids())
 
@@ -102,7 +102,7 @@ def test_invalid_pad_rejected(tmp_path):
 def test_overlapping_bubbles_rejected(tmp_path):
     data = _raw()
     data["drones"][1]["phase2"]["bubble"] = [[0, 0], [10, 0], [10, 2], [0, 2]]  # overlaps drone 0
-    p = tmp_path / "p.yaml"; p.write_text(yaml.safe_dump(data))
+    p = tmp_path / "p.yaml"; p.write_text(yaml.safe_dump(data), encoding="utf-8")
     with pytest.raises(PlanValidationError):
         load_mission_plan(p, valid_pad_ids=_valid_pad_ids())
 
@@ -112,7 +112,19 @@ def test_overlapping_bubbles_rejected(tmp_path):
 # --------------------------------------------------------------------------- #
 def test_planner_gui_exists_and_targets_the_contract():
     assert GUI.exists()
-    html = GUI.read_text()
+    html = GUI.read_text(encoding="utf-8")
     assert "<canvas" in html
     assert "version: 1" in html          # exports the schema version
     assert "route_m" in html and "vantages" in html and "bubble" in html
+
+
+def test_served_html_is_codec_robust_on_windows():
+    """On Windows, Path.read_text() defaults to cp1252 (charmap), which has no 0x8f byte.
+    The previously-failing GUI test died on a black-circle bullet glyph (U+25CF, whose UTF-8
+    encoding ends in byte 0x8f) with "charmap codec can't decode byte 0x8f". The served HTML
+    must be pure ASCII so it decodes under ANY default codec -- and still be valid UTF-8."""
+    for page in (GUI, _ROOT / "c2" / "index.html"):
+        raw = page.read_bytes()
+        raw.decode("ascii")        # pure ASCII -> safe under cp1252 / utf-8 / any locale default
+        raw.decode("cp1252")       # the exact Windows default that raised on 0x8f before
+        raw.decode("utf-8")        # ...and still valid UTF-8

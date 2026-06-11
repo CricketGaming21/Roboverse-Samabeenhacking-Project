@@ -178,6 +178,6 @@ def validate_plan(plan: MissionPlan, *, valid_pad_ids: Optional[Sequence[int]] =
 
 def load_mission_plan(path, *, valid_pad_ids: Optional[Sequence[int]] = None,
                       bubble_buffer_m: float = 0.1) -> MissionPlan:
-    data = yaml.safe_load(Path(path).read_text())
+    data = yaml.safe_load(Path(path).read_text(encoding="utf-8"))
     plan = MissionPlan(**data)            # pydantic: rejects unknown keys / bad shapes
     return validate_plan(plan, valid_pad_ids=valid_pad_ids, bubble_buffer_m=bubble_buffer_m)

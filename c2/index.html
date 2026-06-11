@@ -1,6 +1,6 @@
 <!DOCTYPE html>
 <!-- RoboVerse C2 Operator Console (P10). Single file. Polls the C2 bridge JSON
-     (runtime/c2_bridge.py snapshot — written to state.json or served) and renders the live
+     (runtime/c2_bridge.py snapshot - written to state.json or served) and renders the live
      top-down map (drones, footprints, zones, rover tracks, belief heatmap), a rubric
      scoreboard, alarms (incl. the over-footprint NO-FLY alarm), a pre-flight checklist, an
      evidence-export trigger, and an operator override layer. Schema = c2_bridge.snapshot(). -->
@@ -27,8 +27,8 @@
 </head>
 <body>
 <header>
-  <b>RoboVerse C2 — Challenge 2 Operator Console</b>
-  <span>clock <span id="clock">–</span>s &nbsp;|&nbsp; <span id="conn" class="bad">offline</span></span>
+  <b>RoboVerse C2 &mdash; Challenge 2 Operator Console</b>
+  <span>clock <span id="clock">&ndash;</span>s &nbsp;|&nbsp; <span id="conn" class="bad">offline</span></span>
 </header>
 <div id="grid">
   <div>
@@ -42,10 +42,10 @@
   <div>
     <div class="panel score"><h3>Scoreboard</h3>
       <div>Landings <b id="landings">0</b> / 3 &nbsp; Tagged <b id="tagged">0</b></div>
-      <div>Distinct ids: <span id="taggedIds">–</span></div>
-      <div>Outstanding: <span id="outstanding" class="bad">–</span></div>
+      <div>Distinct ids: <span id="taggedIds">&ndash;</span></div>
+      <div>Outstanding: <span id="outstanding" class="bad">&ndash;</span></div>
     </div>
-    <div class="panel"><h3>Alarms</h3><div id="alarms">–</div></div>
+    <div class="panel"><h3>Alarms</h3><div id="alarms">&ndash;</div></div>
     <div class="panel"><h3>Pre-flight checklist</h3>
       <label><input type="checkbox"> UWB tags live (0,1,2)</label>
       <label><input type="checkbox"> Video streams up</label>
@@ -58,7 +58,7 @@
       <button onclick="send({type:'resume'})">RESUME</button><br/>
       Drone <select id="ovDrone"><option>0</option><option>1</option><option>2</option></select>
       <button onclick="recall()">Recall</button>
-      <button onclick="designate()">Designate target…</button>
+      <button onclick="designate()">Designate target&hellip;</button>
     </div>
     <div class="panel"><h3>Evidence</h3>
       <button onclick="send({type:'export_evidence'})">Export evidence bundle</button>
@@ -74,7 +74,7 @@ let SAMPLE = { clock: 0, drones: [
     { tag_id: 2, xy: [8.0, 5.0], alt_m: 1.1, battery_pct: 19, state: "SEARCH", uwb_ok: false, over_footprint: false }],
   footprints: [[5.0, 3.0, 0.9, 0.9]], zones: [], tracks: [{ id: 22, xy: [3, 3], velocity: [0.1, 0], behaviour: "smooth", last_seen: 0 }],
   belief: [], scoreboard: { landings: 3, tagged_ids: [22], tagged_count: 1, outstanding_ids: [20, 21, 23, 24] },
-  alarms: [{ type: "over_footprint", tag_id: 1, severity: "critical", msg: "drone 1 OVER a crate footprint — NO-FLY" },
+  alarms: [{ type: "over_footprint", tag_id: 1, severity: "critical", msg: "drone 1 OVER a crate footprint \u2014 NO-FLY" },
            { type: "low_battery", tag_id: 2, severity: "warn", msg: "drone 2 battery 19%" }] };
 
 const ARENA = { length_m: 10, width_m: 6 }, PAD = 24;
@@ -108,7 +108,7 @@ function render(s) {
   const sc = s.scoreboard || {};
   document.getElementById("landings").textContent = sc.landings ?? 0;
   document.getElementById("tagged").textContent = sc.tagged_count ?? 0;
-  document.getElementById("taggedIds").textContent = (sc.tagged_ids || []).join(", ") || "–";
+  document.getElementById("taggedIds").textContent = (sc.tagged_ids || []).join(", ") || "\u2013";
   document.getElementById("outstanding").textContent = (sc.outstanding_ids || []).join(", ") || "none";
   const al = document.getElementById("alarms");
   al.innerHTML = (s.alarms && s.alarms.length)

@@ -60,11 +60,11 @@ def test_real_build_wiring_and_lands_3of3():
 
 def test_real_build_passes_uwb_cage_origin(tmp_path):
     _cage_world()
-    data = yaml.safe_load((_ROOT / "config" / "mission_real.yaml").read_text())
+    data = yaml.safe_load((_ROOT / "config" / "mission_real.yaml").read_text(encoding="utf-8"))
     data["uwb"]["origin_x"] = 5.5                            # Cage2/3 origin
     data["uwb"]["origin_y"] = 5.5
     p = tmp_path / "real.yaml"
-    p.write_text(yaml.safe_dump(data))
+    p.write_text(yaml.safe_dump(data), encoding="utf-8")
     cfg = load_real_config(p)
     assert cfg.uwb.origin_x == 5.5
     (_d, _s, uwb, *_rest) = build_live_mission(cfg, sleep=NOSLEEP, real=True)

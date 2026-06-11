@@ -48,7 +48,7 @@ class Arena:
 
 def load_arena(path=None) -> Arena:
     p = Path(path) if path is not None else _DEFAULT
-    data = yaml.safe_load(p.read_text())
+    data = yaml.safe_load(p.read_text(encoding="utf-8"))
     a = data["arena"]
     crates = []
     # New sim emits `structures:`; older/open-cage files use `crates:`. Read either.

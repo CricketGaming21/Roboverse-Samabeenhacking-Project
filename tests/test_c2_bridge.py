@@ -107,7 +107,7 @@ def test_evidence_export_produces_bundle(tmp_path):
     assert Path(manifest["results_sheet"]).exists()
     assert (tmp_path / "rover_22.png").exists() and (tmp_path / "rover_23.png").exists()
     assert Path(manifest["map"]).exists()
-    assert "22" in Path(manifest["results_sheet"]).read_text()
+    assert "22" in Path(manifest["results_sheet"]).read_text(encoding="utf-8")
 
 
 # --------------------------------------------------------------------------- #
@@ -148,7 +148,7 @@ def test_unknown_override_is_rejected_gracefully():
 # --------------------------------------------------------------------------- #
 def test_c2_console_exists_and_reads_the_snapshot():
     assert C2_HTML.exists()
-    html = C2_HTML.read_text()
+    html = C2_HTML.read_text(encoding="utf-8")
     assert "<canvas" in html
     assert "over_footprint" in html and "scoreboard" in html and "alarms" in html
     assert "state.json" in html          # polls the bridge snapshot

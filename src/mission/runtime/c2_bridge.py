@@ -141,11 +141,11 @@ class C2Bridge:
             e = ev[mid]
             xy = e.xy if e.xy is not None else (None, None)
             lines.append(f"{mid},{xy[0]},{xy[1]},{e.t}")
-        sheet.write_text("\n".join(lines) + "\n")
+        sheet.write_text("\n".join(lines) + "\n", encoding="utf-8")
         manifest = {"images": images, "results_sheet": str(sheet), "count": len(ev)}
         if drones is not None:
             map_path = out / "map.json"
-            map_path.write_text(self.to_json(drones, clock))
+            map_path.write_text(self.to_json(drones, clock), encoding="utf-8")
             manifest["map"] = str(map_path)
         return manifest
 

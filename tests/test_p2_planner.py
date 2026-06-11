@@ -29,7 +29,7 @@ def test_load_arena_reads_structures_key(tmp_path):
         "structures": [{"center": [4.7, 2.3], "size": [0.42, 0.42], "height": 1.1},
                        {"center": [7.0, 4.0], "size": [1.0, 0.42], "height": 0.34}],
         "landing_zones": [{"id": 11, "north": 4.4, "east": 1.35, "valid": True}],
-    }))
+    }), encoding="utf-8")
     arena = load_arena(p)
     assert arena.length_m == 10.0 and arena.width_m == 6.0
     assert arena.footprint_tuples() == [(4.7, 2.3, 0.42, 0.42), (7.0, 4.0, 1.0, 0.42)]
@@ -42,7 +42,7 @@ def test_load_arena_legacy_crates_key_still_read(tmp_path):
     p.write_text(yaml.safe_dump({
         "arena": {"length_m": 11.0, "width_m": 11.0},
         "crates": [{"center": [5.0, 3.0], "size": [0.45, 0.45], "height": 0.6}],
-    }))
+    }), encoding="utf-8")
     arena = load_arena(p)
     assert arena.footprint_tuples() == [(5.0, 3.0, 0.45, 0.45)]
 

@@ -25,8 +25,8 @@
 </style>
 </head>
 <body>
-<header><b>RoboVerse — Challenge 2 Mission Planner</b> &nbsp; <span class="legend">
-  <span>● route</span><span>◆ vantage</span><span style="color:#ff6b6b">red = invalid</span></span>
+<header><b>RoboVerse &mdash; Challenge 2 Mission Planner</b> &nbsp; <span class="legend">
+  <span>&#9679; route</span><span>&#9670; vantage</span><span style="color:#ff6b6b">red = invalid</span></span>
 </header>
 <div id="wrap">
   <div id="side">
@@ -116,7 +116,7 @@ function validate() {
       if (segSegHit(A[a], A[a+1], B[b], B[b+1])) { errs.push(`routes ${i} & ${j} cross`); a = A.length; break; } }
   const vd = document.getElementById("valid");
   vd.className = errs.length ? "err" : "ok";
-  vd.textContent = errs.length ? errs.join("\n") : "ok — plan is valid";
+  vd.textContent = errs.length ? errs.join("\n") : "ok \u2014 plan is valid";
   return errs; }
 
 // ---- draw ------------------------------------------------------------------ //
@@ -207,7 +207,7 @@ document.getElementById("applyArena").onclick = () => {
     const o = JSON.parse(txt); if (o.arena) { arena.length_m = o.arena.length_m; arena.width_m = o.arena.width_m; }
     if (o.crates) arena.crates = o.crates; draw(); } catch (e) { alert("arena parse error: " + e); } };
 document.getElementById("exportYaml").onclick = () => {
-  if (validate().length && !confirm("Plan has validation errors — export anyway?")) return;
+  if (validate().length && !confirm("Plan has validation errors \u2014 export anyway?")) return;
   download("mission_plan.yaml", toYaml(), "text/yaml"); };
 document.getElementById("exportPng").onclick = () => download("mission_map.png", "", "image/png") || cv.toBlob(b => {
   const a = document.createElement("a"); a.href = URL.createObjectURL(b); a.download = "mission_map.png"; a.click(); });

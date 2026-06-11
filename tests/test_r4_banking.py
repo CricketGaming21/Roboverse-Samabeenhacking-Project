@@ -120,7 +120,7 @@ def test_evidence_writer_capture_and_gallery(tmp_path):
     st = MissionState()
     st.bank(67, annotated, (4.4, 1.35), 2.0, drone_id=1, path=path)
     idx = ew.gallery(st.evidence())
-    html_text = (tmp_path / "index.html").read_text()
+    html_text = (tmp_path / "index.html").read_text(encoding="utf-8")
     assert idx.endswith("index.html")
     assert "rover_67.png" in html_text
     assert "ID 67" in html_text
@@ -133,7 +133,7 @@ def test_gallery_lists_all_banked_ids(tmp_path):
     for mid in (11, 45, 67):
         st.bank(mid, None, (4.0, 2.0), 1.0, drone_id=0, path=str(tmp_path / f"rover_{mid}.png"))
     ew.gallery(st.evidence())
-    text = (tmp_path / "index.html").read_text()
+    text = (tmp_path / "index.html").read_text(encoding="utf-8")
     for mid in (11, 45, 67):
         assert f"ID {mid}" in text and f"rover_{mid}.png" in text
 
@@ -221,7 +221,7 @@ def test_scan_banker_bank_writes_evidence_and_records_provenance(tmp_path):
     e = st.evidence()[67]
     assert e.drone_id == 0 and e.path.endswith("rover_67.png")
     assert (tmp_path / "rover_67.png").exists()
-    assert "ID 67" in (tmp_path / "index.html").read_text()
+    assert "ID 67" in (tmp_path / "index.html").read_text(encoding="utf-8")
     fpx.set_active_world(None)
 
 
@@ -316,7 +316,7 @@ def test_phase2_banks_write_evidence_and_gallery(tmp_path):
     assert st.tagged() == {20, 21} and st.count() == 2          # both banked, no double-count
     assert (tmp_path / "rover_20.png").exists()
     assert (tmp_path / "rover_21.png").exists()
-    text = (tmp_path / "index.html").read_text()
+    text = (tmp_path / "index.html").read_text(encoding="utf-8")
     assert "ID 20" in text and "ID 21" in text                 # gallery lists every banked id
     assert st.evidence()[20].drone_id == 0
     assert st.evidence()[20].path.endswith("rover_20.png")

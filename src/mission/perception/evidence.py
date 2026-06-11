@@ -107,13 +107,13 @@ class EvidenceWriter:
                 f'<span class="cap">{cap}</span></figcaption>\n'
                 f'    </figure>')
         count = len(evidence)
-        ids = ", ".join(str(m) for m in sorted(evidence)) or "—"
+        ids = ", ".join(str(m) for m in sorted(evidence)) or "-"
         page = _GALLERY_TEMPLATE.format(
             title=html.escape(self.title), count=count, ids=html.escape(ids),
             cards="\n".join(cards) if cards else
             '    <p class="empty">No rovers banked yet.</p>')
         idx = self.out_dir / "index.html"
-        idx.write_text(page)
+        idx.write_text(page, encoding="utf-8")
         return str(idx)
 
 

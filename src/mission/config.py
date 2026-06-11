@@ -192,7 +192,7 @@ class MissionConfig(_Base):
 def load_config(path=None) -> MissionConfig:
     """Load + validate the mission config (sim/default). Unknown keys raise `ValidationError`."""
     p = Path(path) if path is not None else DEFAULT_CONFIG_PATH
-    data = yaml.safe_load(p.read_text())
+    data = yaml.safe_load(p.read_text(encoding="utf-8"))
     return MissionConfig(**data)
 
 
@@ -205,7 +205,7 @@ def load_real_config(path=None) -> MissionConfig:
     to the internal `pads: [{id, north, east, valid, designated}]` so mission code is unchanged.
     `mission_config.yaml` (sim) is never touched."""
     p = Path(path) if path is not None else REAL_CONFIG_PATH
-    data = yaml.safe_load(p.read_text())
+    data = yaml.safe_load(p.read_text(encoding="utf-8"))
     designated = {int(i) for i in data.pop("designated_pads", [])}
     pads = data.get("pads")
     if isinstance(pads, dict):                  # {id: {x, y}} → list[PadCfg]

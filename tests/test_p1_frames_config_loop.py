@@ -73,46 +73,46 @@ def test_load_default_config():
 
 
 def test_real_defaults_when_section_absent(tmp_path):
-    data = yaml.safe_load(DEFAULT_CONFIG_PATH.read_text())
+    data = yaml.safe_load(DEFAULT_CONFIG_PATH.read_text(encoding="utf-8"))
     data.pop("real", None)                                      # older profile with no real: block
     p = tmp_path / "c.yaml"
-    p.write_text(yaml.safe_dump(data))
+    p.write_text(yaml.safe_dump(data), encoding="utf-8")
     cfg = load_config(p)
     assert cfg.real.heartbeat_hz == 10.0 and cfg.real.velocity_level == "MEDIUM"
 
 
 def test_real_heartbeat_hz_must_be_positive(tmp_path):
-    data = yaml.safe_load(DEFAULT_CONFIG_PATH.read_text())
+    data = yaml.safe_load(DEFAULT_CONFIG_PATH.read_text(encoding="utf-8"))
     data["real"]["heartbeat_hz"] = 0
     p = tmp_path / "c.yaml"
-    p.write_text(yaml.safe_dump(data))
+    p.write_text(yaml.safe_dump(data), encoding="utf-8")
     with pytest.raises(ValidationError):
         load_config(p)
 
 
 def test_unknown_key_rejected(tmp_path):
-    data = yaml.safe_load(DEFAULT_CONFIG_PATH.read_text())
+    data = yaml.safe_load(DEFAULT_CONFIG_PATH.read_text(encoding="utf-8"))
     data["frame"]["bogus_key"] = 1
     p = tmp_path / "c.yaml"
-    p.write_text(yaml.safe_dump(data))
+    p.write_text(yaml.safe_dump(data), encoding="utf-8")
     with pytest.raises(ValidationError):
         load_config(p)
 
 
 def test_unknown_top_level_key_rejected(tmp_path):
-    data = yaml.safe_load(DEFAULT_CONFIG_PATH.read_text())
+    data = yaml.safe_load(DEFAULT_CONFIG_PATH.read_text(encoding="utf-8"))
     data["surprise"] = {"x": 1}
     p = tmp_path / "c.yaml"
-    p.write_text(yaml.safe_dump(data))
+    p.write_text(yaml.safe_dump(data), encoding="utf-8")
     with pytest.raises(ValidationError):
         load_config(p)
 
 
 def test_speed_cap_enforced(tmp_path):
-    data = yaml.safe_load(DEFAULT_CONFIG_PATH.read_text())
+    data = yaml.safe_load(DEFAULT_CONFIG_PATH.read_text(encoding="utf-8"))
     data["speed"]["max_mps"] = 0.7                                     # over the hard cap
     p = tmp_path / "c.yaml"
-    p.write_text(yaml.safe_dump(data))
+    p.write_text(yaml.safe_dump(data), encoding="utf-8")
     with pytest.raises(ValidationError):
         load_config(p)
 
