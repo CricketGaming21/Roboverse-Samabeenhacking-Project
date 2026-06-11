@@ -15,13 +15,15 @@ from __future__ import annotations
 
 import math
 import time
-from typing import Callable, List, Optional, Sequence, Tuple
+from dataclasses import dataclass, field
+from typing import Callable, Dict, List, Optional, Sequence, Tuple
 
 import numpy as np
 
 from mission.control.uwb_loop import fly_to_uwb
 from mission.perception.aruco import confirm_with_aruco, is_rover_id
-from mission.perception.detector import frame_bgr
+from mission.perception.detector import Detection, frame_bgr
+from mission.perception.evidence import annotate as _annotate, caption_for
 from mission.planner.geometry import Rect
 from mission.planner.projection import CameraIntrinsics, pixel_to_arena
 from mission.world.taskboard import Track
@@ -77,6 +79,123 @@ def _marker_xy(bbox, cam_xy: Optional[Point], yaw_deg: float, alt_m: float,
 
 
 # --------------------------------------------------------------------------- #
+# scan-while-transit banker  (R4) — the single banking chokepoint
+# --------------------------------------------------------------------------- #
+@dataclass
+class ScanOutcome:
+    """What one `ScanBanker.scan` frame produced."""
+    banked: set = field(default_factory=set)        # ids banked on THIS frame
+    in_view: set = field(default_factory=set)        # decodable rover ids in view (banked or not)
+    marginal: List[Tuple[int, Detection]] = field(default_factory=list)  # in-zone, decodable,
+    #                                                  NOT gate-passing → hand to lock_and_tag
+
+
+class ScanBanker:
+    """Continuous scan-while-transit banker (R4). Run it on **every** frame — during transit
+    hops AND vantage dwells. A rover id is banked the instant it clears the gate (≥`min_marker_px`,
+    fully in-frame, inside this drone's zone) on `hold_frames` **consecutive** frames seen by THIS
+    drone — no deliberate dwell-lock required, so a drone banks a rover it resolves while flying.
+
+    De-dup is by id (HARD invariant #5): an **already-banked** id is ignored (its streak is dropped
+    — **no re-lock, no re-bank, no dwell**). On a bank it writes annotated evidence, records the
+    `drone_id` + PNG path, rebuilds the gallery and **returns the camera to the search pitch**
+    (bank-and-release). It is the single chokepoint every bank routes through (scan, lock_and_tag,
+    persist_and_read) so evidence + provenance + release are uniform."""
+
+    def __init__(self, drone, uwb, tag_id: int, state, *, allow, intrinsics=None,
+                 gimbal_deg: float = 90.0, search_pitch_deg: Optional[float] = None,
+                 hold_frames: int = 5, min_marker_px: int = 40, frame_margin_px: int = 8,
+                 dictionary: str = "DICT_6X6_250", evidence=None, taskboard=None,
+                 in_zone: Optional[Callable[[Optional[Point]], bool]] = None,
+                 clock: Callable[[], float] = time.time):
+        self.drone = drone
+        self.uwb = uwb
+        self.tag_id = tag_id
+        self.state = state
+        self.allow = set(allow)
+        self.intr = intrinsics or CameraIntrinsics()
+        self.gimbal_deg = gimbal_deg
+        self.search_pitch_deg = gimbal_deg if search_pitch_deg is None else search_pitch_deg
+        self.hold_frames = int(hold_frames)
+        self.min_marker_px = int(min_marker_px)
+        self.frame_margin_px = int(frame_margin_px)
+        self.dictionary = dictionary
+        self.evidence = evidence
+        self.taskboard = taskboard
+        self.in_zone = in_zone
+        self.clock = clock
+        self._streak: Dict[int, int] = {}
+
+    def _gate(self, bbox, shape) -> bool:
+        """The referee gate: marker big enough AND fully in-frame (with a margin)."""
+        bx, by, bw, bh = bbox
+        h_px, w_px = shape[0], shape[1]
+        m = self.frame_margin_px
+        in_frame = (bx >= m and by >= m and bx + bw <= w_px - 1 - m
+                    and by + bh <= h_px - 1 - m)
+        return max(bw, bh) >= self.min_marker_px and in_frame
+
+    def scan(self, bgr, *, cam_xy: Optional[Point] = None,
+             yaw: Optional[float] = None, alt_m: Optional[float] = None) -> ScanOutcome:
+        """Process one camera frame. Banks every gate-passing, in-zone, un-banked rover id whose
+        consecutive-frame streak reaches `hold_frames`. Logs each sighting to the taskboard."""
+        if cam_xy is None:
+            cam_xy = drone_arena_xy(self.drone, self.uwb, self.tag_id)
+        if yaw is None:
+            yaw = self.drone.get_orientation().yaw
+        if alt_m is None:
+            alt_m = self.drone.get_altitude() / 100.0
+        out = ScanOutcome()
+        qualifying: set = set()
+        for d in confirm_with_aruco(bgr, self.dictionary):
+            mid = d.marker_id
+            if mid is None or not is_rover_id(mid, self.allow):
+                continue
+            out.in_view.add(mid)
+            xy = _marker_xy(d.bbox, cam_xy, yaw, alt_m, self.gimbal_deg, self.intr)
+            if self.taskboard is not None:
+                self.taskboard.see(Track(marker_id=mid,
+                                         xy=xy if xy is not None else cam_xy, t=self.clock()))
+            if self.state.is_tagged(mid):            # bank-and-release: ignore an already-banked id
+                self._streak.pop(mid, None)
+                continue
+            if self.in_zone is not None and not self.in_zone(xy):
+                self._streak.pop(mid, None)          # out of our zone (logged) — not ours to bank
+                continue
+            if not self._gate(d.bbox, bgr.shape):
+                self._streak.pop(mid, None)          # decodable but marginal → centre via lock_and_tag
+                out.marginal.append((mid, d))
+                continue
+            qualifying.add(mid)
+            self._streak[mid] = self._streak.get(mid, 0) + 1
+            if self._streak[mid] >= self.hold_frames:
+                if self.bank_one(mid, d.bbox, bgr, xy):
+                    out.banked.add(mid)
+        for mid in list(self._streak):               # streaks must be CONSECUTIVE
+            if mid not in qualifying:
+                self._streak.pop(mid, None)
+        return out
+
+    def bank_one(self, marker_id: int, bbox, bgr, xy: Optional[Point]) -> bool:
+        """Single bank chokepoint: de-dup, store the annotated frame, write the PNG + record the
+        drone_id/path, rebuild the gallery, and return the camera to the search pitch. Returns
+        True iff this id was newly banked."""
+        if self.state.is_tagged(marker_id):
+            return False
+        t = self.clock()
+        annotated = _annotate(bgr, bbox, marker_id, caption_for(self.tag_id, t, xy))
+        if not self.state.bank(marker_id, annotated, xy, t, drone_id=self.tag_id):
+            return False
+        self._streak.pop(marker_id, None)
+        if self.evidence is not None:
+            path = self.evidence.write(annotated, marker_id)
+            self.state.set_path(marker_id, path)
+            self.evidence.gallery(self.state.evidence())
+        self.drone.set_camera_angle(_DOWN, self.search_pitch_deg)   # release → resume search pitch
+        return True
+
+
+# --------------------------------------------------------------------------- #
 # lock-on + tag (visual servo)
 # --------------------------------------------------------------------------- #
 def lock_and_tag(drone, stream, detection, state, *, hold_frames: int = 5,
@@ -88,11 +207,17 @@ def lock_and_tag(drone, stream, detection, state, *, hold_frames: int = 5,
                  tag_id: Optional[int] = None,
                  dictionary: str = "DICT_6X6_250", sleep=time.sleep,
                  should_stop: Optional[Callable[[], bool]] = None,
-                 clock: Callable[[], float] = time.time, on_step=None) -> bool:
-    """Servo the drone to centre `detection.marker_id` and hold `hold_frames` frames,
-    then bank it. Bounded by `lock_timeout_s` (no deadlock). Returns True iff banked."""
+                 clock: Callable[[], float] = time.time, on_step=None,
+                 banker: Optional["ScanBanker"] = None) -> bool:
+    """Centre `detection.marker_id` and hold `hold_frames` gate-passing frames, then bank it.
+    Bounded by `lock_timeout_s` (no deadlock). Returns True iff banked.
+
+    R4: this is now only the **centring assist** for a marginal/edge read — the continuous
+    `ScanBanker` banks well-framed reads during transit/patrol without a lock. An **already-
+    banked** id is a no-op (bank-and-release — no re-lock, no camera move). When a `banker` is
+    given, the bank routes through it (uniform evidence + provenance + camera release)."""
     target_id = detection.marker_id
-    if target_id is None:
+    if target_id is None or state.is_tagged(target_id):   # bank-and-release: never re-lock
         return False
     intr = intrinsics or CameraIntrinsics()
     cx, cy = intr.cx, intr.cy
@@ -133,7 +258,10 @@ def lock_and_tag(drone, stream, detection, state, *, hold_frames: int = 5,
                 cam_xy = drone_arena_xy(drone, uwb, tag_id)
                 xy = _marker_xy(match.bbox, cam_xy, drone.get_orientation().yaw,
                                 drone.get_altitude() / 100.0, gimbal_deg, intr)
-                state.bank(target_id, bgr, xy, clock())     # BGR evidence (imwrite-ready)
+                if banker is not None:                      # uniform evidence + bank-and-release
+                    banker.bank_one(target_id, match.bbox, bgr, xy)
+                else:
+                    state.bank(target_id, bgr, xy, clock())   # BGR evidence (imwrite-ready)
                 drone.send_manual_control(0.0, 0.0, up, 0.0)
                 return True
         else:
@@ -219,7 +347,7 @@ def persist_and_read(drone, stream, target_xy, state, *, allow, dictionary,
                      presence_min_area_px=500, kp_px=0.02, rate_hz=20.0, guard=None,
                      sleep=time.sleep, clock: Callable[[], float] = time.time,
                      should_stop: Optional[Callable[[], bool]] = None, on_step=None,
-                     **loop_kwargs) -> Optional[int]:
+                     banker: Optional["ScanBanker"] = None, **loop_kwargs) -> Optional[int]:
     """Hold on a SEEN-but-UNREAD rover (body visible, marker out of the gimbal cone): keep it
     framed at the held SEARCH PITCH and wait for the sweeping gimbal to bring its marker into
     the cone, then bank it. The target stays ACTIVE across ticks — it is NOT dropped just
@@ -259,7 +387,10 @@ def persist_and_read(drone, stream, target_xy, state, *, allow, dictionary,
                         cam_xy = drone_arena_xy(drone, uwb, tag_id)
                         xy = _marker_xy(d.bbox, cam_xy, drone.get_orientation().yaw,
                                         drone.get_altitude() / 100.0, gimbal_deg, intr)
-                        state.bank(d.marker_id, bgr, xy, clock())
+                        if banker is not None:              # uniform evidence + bank-and-release
+                            banker.bank_one(d.marker_id, d.bbox, bgr, xy)
+                        else:
+                            state.bank(d.marker_id, bgr, xy, clock())
                         drone.send_manual_control(0.0, 0.0, up, 0.0)
                         return d.marker_id
                 else:
@@ -294,14 +425,25 @@ def vantage_patrol(drone, uwb, tag_id: int, vantages: Sequence[dict],
                    on_dwell: Callable[[], bool], *, gimbal_deg: float = 90.0,
                    dwell_s: float = 1.0, alt_m: float = 1.1, guard=None, graph=None,
                    rate_hz: float = 20.0, sleep=time.sleep, on_step=None,
-                   **loop_kwargs) -> bool:
+                   on_frame: Optional[Callable[[], bool]] = None, **loop_kwargs) -> bool:
     """One cycle of overwatch: fly to each vantage, tilt the gimbal, dwell while calling
     `on_dwell()` per frame. `on_dwell` returns True to stop the whole patrol (done).
+
+    `on_frame` (R4) is the **scan-while-transit** hook: it fires every control step of each
+    vantage HOP so a drone banks a gate-passing read while flying between vantages (the dwell
+    keeps scanning via `on_dwell`, so each frame is scanned exactly once — no double count).
 
     With `graph`, each vantage hop is routed **around inflated footprints** (no-overfly is
     structural in Phase 2 too — a straight hop can cut over a crate, breaching compliance)."""
     from mission.planner.geometry import plan_path
     dt = 1.0 / rate_hz if rate_hz > 0 else 0.05
+
+    def _transit_step(info):
+        if on_step is not None:
+            on_step(info)
+        if on_frame is not None:
+            on_frame()                       # scan-while-transit (banks mid-hop; passive, no motion)
+
     for v in vantages:
         target = (float(v["xy"][0]), float(v["xy"][1]))
         waypoints = [target]
@@ -312,7 +454,7 @@ def vantage_patrol(drone, uwb, tag_id: int, vantages: Sequence[dict],
                 waypoints = path[1:] if len(path) > 1 else path
         for wp in waypoints:
             fly_to_uwb(drone, uwb, tag_id, wp, alt_m=alt_m, guard=guard,
-                       rate_hz=rate_hz, sleep=sleep, on_step=on_step, **loop_kwargs)
+                       rate_hz=rate_hz, sleep=sleep, on_step=_transit_step, **loop_kwargs)
         drone.set_camera_angle(_DOWN, float(v.get("gimbal_deg", gimbal_deg)))
         dwell_steps = max(1, int(float(v.get("dwell_s", dwell_s)) * rate_hz))
         for _ in range(dwell_steps):
@@ -341,15 +483,22 @@ def phase2_search(drone, uwb, tag_id: int, vantages: Sequence[dict], stream, sta
                   presence=None, footprints: Sequence = (), bounds=None,
                   persist_timeout_s: float = 9.0, orbit_step_m: float = 0.6,
                   max_orbits: int = 2, presence_min_area_px: int = 500,
-                  graph=None, sleep=time.sleep, clock: Callable[[], float] = time.time,
+                  evidence=None, graph=None, sleep=time.sleep,
+                  clock: Callable[[], float] = time.time,
                   on_step=None, **loop_kwargs) -> set:
-    """Patrol vantages, lock-and-tag distinct rover ids within `bubble` (mop-up drops the
-    gate near the end). Banks ONLY ids in the `rover_ids` allow-list (defaults to `all_ids`).
+    """Patrol vantages and bank distinct rover ids within `bubble` (mop-up drops the gate near
+    the end). Banks ONLY ids in the `rover_ids` allow-list (defaults to `all_ids`).
 
-    R2 (when `presence` — a body detector — is given): a rover whose marker is OUT of the
-    gimbal cone shows only its body. The drone PERSISTS on that body (holding the search pitch,
-    keeping it framed) until the sweeping gimbal brings the marker into the cone and it banks;
-    a light lateral orbit breaks a stuck hold. Returns the set of ids THIS drone banked."""
+    R4: a `ScanBanker` runs on **every** frame — during the vantage HOPS (scan-while-transit)
+    AND the dwells — so a drone banks a gate-passing read while flying, without a deliberate
+    dwell-lock, and **releases** an id the instant it banks (already-banked → ignored). Every
+    bank writes annotated evidence (R4c) when an `evidence` writer is given. `lock_and_tag` is
+    kept only to **centre a marginal/edge read** until it clears the gate.
+
+    R2 (when `presence` — a body detector — is given): a rover whose marker is OUT of the gimbal
+    cone shows only its body. The drone PERSISTS on that body (holding the search pitch, keeping
+    it framed) until the sweeping gimbal brings the marker into the cone and it banks; a light
+    lateral orbit breaks a stuck hold. Returns the set of ids THIS drone banked."""
     banked: set = set()
     flags = {"mopup": False}
     allow = set(rover_ids if rover_ids is not None else (all_ids or []))
@@ -361,6 +510,22 @@ def phase2_search(drone, uwb, tag_id: int, vantages: Sequence[dict], stream, sta
         return (bubble is None or flags["mopup"]
                 or (xy is not None and point_in_poly(xy, bubble)))
 
+    banker = ScanBanker(drone, uwb, tag_id, state, allow=allow, intrinsics=intrinsics,
+                        gimbal_deg=gimbal_deg, search_pitch_deg=gimbal_deg,
+                        hold_frames=hold_frames, min_marker_px=min_marker_px,
+                        dictionary=dictionary, evidence=evidence, taskboard=taskboard,
+                        in_zone=_in_zone, clock=clock)
+
+    def transit_scan() -> bool:
+        """on_frame: scan-while-transit — bank a gate-passing read mid-hop (passive, no motion)."""
+        if done():
+            return True
+        frame = stream.latest_frame
+        if frame is None:
+            return False
+        banked.update(banker.scan(frame_bgr(frame)).banked)
+        return done()
+
     def scan_and_lock() -> bool:
         if done():
             return True
@@ -368,29 +533,27 @@ def phase2_search(drone, uwb, tag_id: int, vantages: Sequence[dict], stream, sta
         if frame is None:
             return False
         bgr = frame_bgr(frame)
-        cam_xy = drone_arena_xy(drone, uwb, tag_id)
-        yaw, alt = drone.get_orientation().yaw, drone.get_altitude() / 100.0
-        # 1) a rover whose marker is decodable RIGHT NOW (in the gimbal cone)
-        for d in confirm_with_aruco(bgr, dictionary):
-            mid = d.marker_id
-            if mid is None or not is_rover_id(mid, allow) or state.is_tagged(mid):
-                continue
-            xy = _marker_xy(d.bbox, cam_xy, yaw, alt, gimbal_deg, intrinsics)
-            taskboard.see(Track(marker_id=mid, xy=xy if xy is not None else cam_xy,
-                                t=clock()))
-            if not _in_zone(xy):
-                continue                                  # gated out of our zone (logged)
-            # commitment: a started lock runs to completion (bounded)
-            if lock_and_tag(drone, stream, d, state, hold_frames=hold_frames,
-                            center_tol_px=center_tol_px, min_marker_px=min_marker_px,
-                            lock_timeout_s=lock_timeout_s, dictionary=dictionary,
-                            rate_hz=rate_hz, kp_px=kp_px, gimbal_deg=gimbal_deg,
-                            intrinsics=intrinsics, uwb=uwb, tag_id=tag_id, alt_m=alt_m,
-                            sleep=sleep, clock=clock, on_step=on_step):
+        out = banker.scan(bgr)                             # 1) continuous gate (transit + dwell)
+        banked.update(out.banked)
+        if done():
+            return True
+        # 2) centre a MARGINAL in-zone read (edge/too-small) so it clears the gate — the only
+        #    place a deliberate lock happens now; well-framed reads bank via the gate above.
+        if out.marginal:
+            mid, det = out.marginal[0]
+            if not state.is_tagged(mid) and lock_and_tag(
+                    drone, stream, det, state, hold_frames=hold_frames,
+                    center_tol_px=center_tol_px, min_marker_px=min_marker_px,
+                    lock_timeout_s=lock_timeout_s, dictionary=dictionary, rate_hz=rate_hz,
+                    kp_px=kp_px, gimbal_deg=gimbal_deg, intrinsics=intrinsics, uwb=uwb,
+                    tag_id=tag_id, alt_m=alt_m, sleep=sleep, clock=clock, on_step=on_step,
+                    banker=banker):
                 banked.add(mid)
-            return done()                                 # one target per scan frame
-        # 2) R2 — no decodable rover this frame: PERSIST on a seen body (gimbal out-of-cone)
-        if presence is not None:
+            return done()
+        # 3) R2 — nothing decodable but a body is present (gimbal out-of-cone): PERSIST
+        if not out.in_view and presence is not None:
+            cam_xy = drone_arena_xy(drone, uwb, tag_id)
+            yaw, alt = drone.get_orientation().yaw, drone.get_altitude() / 100.0
             cand = _nearest_presence(presence, bgr, None, drone, gimbal_deg, intrinsics,
                                      uwb, tag_id, footprints, bounds, presence_min_area_px)
             if cand is not None:
@@ -405,7 +568,7 @@ def phase2_search(drone, uwb, tag_id: int, vantages: Sequence[dict], stream, sta
                         max_orbits=max_orbits, hold_frames=hold_frames,
                         min_marker_px=min_marker_px, presence_min_area_px=presence_min_area_px,
                         kp_px=kp_px, rate_hz=rate_hz, guard=guard, sleep=sleep, clock=clock,
-                        on_step=on_step)
+                        on_step=on_step, banker=banker)
                     if mid is not None:
                         banked.add(mid)
                     return done()
@@ -419,7 +582,7 @@ def phase2_search(drone, uwb, tag_id: int, vantages: Sequence[dict], stream, sta
         if vantage_patrol(drone, uwb, tag_id, vantages, scan_and_lock,
                           gimbal_deg=gimbal_deg, dwell_s=dwell_s, alt_m=alt_m,
                           guard=guard, graph=graph, rate_hz=rate_hz, sleep=sleep,
-                          on_step=on_step, **loop_kwargs):
+                          on_step=on_step, on_frame=transit_scan, **loop_kwargs):
             break
     return banked
 

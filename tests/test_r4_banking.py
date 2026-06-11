@@ -13,8 +13,14 @@ import cv2
 import numpy as np
 import pytest
 
+from mission.config import load_config
+from mission.mission.phase2_search import (ScanBanker, lock_and_tag,
+                                           persist_and_read, phase2_search,
+                                           vantage_patrol)
+from mission.mission.worker import DroneWorker
 from mission.perception.aruco import confirm_with_aruco
-from mission.perception.detector import frame_bgr
+from mission.perception.detector import (ClassicalRoverDetector, Detection,
+                                         frame_bgr)
 from mission.perception.evidence import EvidenceWriter, annotate, caption_for
 from mission.planner.projection import CameraIntrinsics
 from mission.world.mission_state import MissionState
@@ -130,3 +136,233 @@ def test_gallery_lists_all_banked_ids(tmp_path):
     text = (tmp_path / "index.html").read_text()
     for mid in (11, 45, 67):
         assert f"ID {mid}" in text and f"rover_{mid}.png" in text
+
+
+# --------------------------------------------------------------------------- #
+# ScanBanker — the continuous gate (≥40 px + in-frame + 5 CONSECUTIVE frames)
+# --------------------------------------------------------------------------- #
+def _banker(d, w, st, *, allow=frozenset({20}), evidence=None, in_zone=None,
+            gimbal=90.0, search_pitch=52.0, taskboard=None):
+    u = fuwb.FakeUWBParserThread(world=w)
+    return ScanBanker(d, u, 0, st, allow=set(allow), intrinsics=INTR, gimbal_deg=gimbal,
+                      search_pitch_deg=search_pitch, evidence=evidence,
+                      taskboard=taskboard or TaskBoard(), in_zone=in_zone,
+                      clock=lambda: w.clock)
+
+
+def test_scan_banker_gate_px_and_in_frame():
+    """The gate the referee scores on: ≥40 px AND fully in-frame (with a margin)."""
+    w = _world([Marker(20, 5.0, 3.0, size_m=0.20)])
+    d, _s = _drone_over(w, 5.0, 3.0)
+    b = _banker(d, w, MissionState())
+    assert b._gate((100, 100, 50, 50), (480, 640)) is True       # 50 px, well inside
+    assert b._gate((100, 100, 30, 30), (480, 640)) is False      # 30 px < 40 → too small
+    assert b._gate((2, 2, 50, 50), (480, 640)) is False          # inside the 8-px margin (edge)
+    assert b._gate((600, 100, 50, 50), (480, 640)) is False      # runs off the right edge
+
+
+def test_scan_banker_banks_after_5_consecutive_frames():
+    w = _world([Marker(20, 5.0, 3.0, size_m=0.20)])
+    d, s = _drone_over(w, 5.0, 3.0)                  # nadir over the rover, gimbal off
+    st = MissionState()
+    b = _banker(d, w, st)
+    for _ in range(4):                               # 4 qualifying frames → NOT yet banked
+        out = b.scan(frame_bgr(s.latest_frame))
+        assert not out.banked and not st.is_tagged(20)
+    out = b.scan(frame_bgr(s.latest_frame))          # the 5th consecutive → banked
+    assert 20 in out.banked and st.is_tagged(20)
+    fpx.set_active_world(None)
+
+
+def test_scan_banker_streak_resets_on_gap():
+    """A non-consecutive read restarts the 5-frame count (the gate is CONSECUTIVE frames)."""
+    w = _world([Marker(20, 5.0, 3.0, size_m=0.20)])
+    d, s = _drone_over(w, 5.0, 3.0)
+    st = MissionState()
+    b = _banker(d, w, st)
+    for _ in range(4):                               # streak → 4
+        b.scan(frame_bgr(s.latest_frame))
+    d.n, d.e = 9.5, 5.5                               # marker leaves the FOV → streak breaks
+    b.scan(frame_bgr(s.latest_frame))
+    assert not st.is_tagged(20)
+    d.n, d.e = 5.0, 3.0                               # back over the rover
+    for _ in range(4):                               # only 4 again → still not banked
+        out = b.scan(frame_bgr(s.latest_frame))
+        assert not out.banked
+    out = b.scan(frame_bgr(s.latest_frame))          # 5 consecutive after the gap → banked
+    assert 20 in out.banked
+    fpx.set_active_world(None)
+
+
+def test_scan_banker_ignores_already_banked():
+    """Bank-and-release: an already-banked id is ignored — no re-bank, no streak."""
+    w = _world([Marker(20, 5.0, 3.0, size_m=0.20)])
+    d, s = _drone_over(w, 5.0, 3.0)
+    st = MissionState()
+    st.bank(20, None, (5.0, 3.0), 0.0)               # already banked
+    b = _banker(d, w, st)
+    for _ in range(6):
+        out = b.scan(frame_bgr(s.latest_frame))
+        assert not out.banked
+    assert st.count() == 1                           # never re-banked / double-counted
+    assert 20 not in b._streak                        # not even tracked
+    fpx.set_active_world(None)
+
+
+def test_scan_banker_bank_writes_evidence_and_records_provenance(tmp_path):
+    w = _world([Marker(67, 5.0, 3.0, size_m=0.20)])
+    d, s = _drone_over(w, 5.0, 3.0)
+    st = MissionState()
+    ew = EvidenceWriter(tmp_path)
+    b = _banker(d, w, st, allow={67}, evidence=ew)
+    for _ in range(5):
+        b.scan(frame_bgr(s.latest_frame))
+    assert st.is_tagged(67)
+    e = st.evidence()[67]
+    assert e.drone_id == 0 and e.path.endswith("rover_67.png")
+    assert (tmp_path / "rover_67.png").exists()
+    assert "ID 67" in (tmp_path / "index.html").read_text()
+    fpx.set_active_world(None)
+
+
+def test_scan_banker_zone_gate_blocks_out_of_zone_but_logs():
+    """An in-view rover OUTSIDE the zone is logged to the taskboard but not banked."""
+    w = _world([Marker(20, 5.0, 3.0, size_m=0.20)])
+    d, s = _drone_over(w, 5.0, 3.0)
+    st, tb = MissionState(), TaskBoard()
+    b = _banker(d, w, st, taskboard=tb, in_zone=lambda xy: False)   # nothing is "in zone"
+    for _ in range(6):
+        out = b.scan(frame_bgr(s.latest_frame))
+        assert not out.banked
+    assert not st.is_tagged(20)
+    assert tb.track_for(20) is not None              # the sighting was still logged
+    fpx.set_active_world(None)
+
+
+# --------------------------------------------------------------------------- #
+# scan-while-transit — bank a gate-passing read while FLYING (no dwell-lock)
+# --------------------------------------------------------------------------- #
+def test_scan_while_transit_banks_during_hop():
+    """The rover sits on the A->B transit path; the vantage is far past it and the dwell does
+    NOT scan — so a bank can only have happened WHILE the drone was flying past."""
+    w = _world([Marker(20, 4.0, 2.0, size_m=0.22)])
+    d, s = _drone_over(w, 1.0, 2.0)                  # start south, nadir
+    u = fuwb.FakeUWBParserThread(world=w)
+    st = MissionState()
+    b = ScanBanker(d, u, 0, st, allow={20}, intrinsics=INTR, gimbal_deg=90.0,
+                   clock=lambda: w.clock)
+
+    def on_frame():
+        f = s.latest_frame
+        if f is not None:
+            b.scan(frame_bgr(f))
+        return False
+
+    # on_dwell=False (no dwell scanning); vantage 3 m north of the rover → not seen at the dwell
+    vantage_patrol(d, u, 0, [{"xy": (7.0, 2.0), "gimbal_deg": 90, "dwell_s": 0.2}],
+                   lambda: False, gimbal_deg=90.0, alt_m=1.1, rate_hz=20.0,
+                   sleep=NOSLEEP, on_frame=on_frame)
+    assert st.is_tagged(20)                          # banked mid-transit, no dwell-lock
+    fpx.set_active_world(None)
+
+
+# --------------------------------------------------------------------------- #
+# bank-and-release — camera returns to search pitch; already-banked → no re-lock
+# --------------------------------------------------------------------------- #
+def test_bank_and_release_returns_camera_to_search_pitch():
+    w = _world([Marker(20, 5.0, 3.0, size_m=0.20)])
+    d, s = _drone_over(w, 5.0, 3.0, pitch_down=90.0)   # reading at nadir
+    st = MissionState()
+    b = _banker(d, w, st, gimbal=90.0, search_pitch=52.0)
+    for _ in range(5):
+        b.scan(frame_bgr(s.latest_frame))
+    assert st.is_tagged(20)
+    assert d.pitch_down_deg == pytest.approx(52.0)     # released → back to the search pitch
+    fpx.set_active_world(None)
+
+
+def test_already_banked_id_triggers_no_relock():
+    """lock_and_tag on an already-banked id is a no-op: no servo, no camera move (no re-lock)."""
+    w = _world([Marker(20, 5.0, 3.0, size_m=0.20)])
+    d, s = _drone_over(w, 5.0, 3.0, pitch_down=52.0)
+    st = MissionState()
+    st.bank(20, None, (5.0, 3.0), 0.0)
+    n0, p0 = d.manual_calls, d.pitch_down_deg
+    ok = lock_and_tag(d, s, Detection((0, 0, 9, 9), 1.0, marker_id=20), st,
+                      intrinsics=INTR, sleep=NOSLEEP)
+    assert ok is False
+    assert d.manual_calls == n0                       # no servo issued
+    assert d.pitch_down_deg == pytest.approx(p0)      # camera untouched
+    fpx.set_active_world(None)
+
+
+# --------------------------------------------------------------------------- #
+# phase2_search end-to-end — evidence per banked id + gallery, no double-count
+# --------------------------------------------------------------------------- #
+def test_phase2_banks_write_evidence_and_gallery(tmp_path):
+    w = _world([Marker(20, 5.0, 3.0, size_m=0.20), Marker(21, 5.0, 2.5, size_m=0.20)])
+    fpx.set_active_world(w)
+    d = fpx.FakeDroneAPI(w)
+    d.connect(w.ip_map[0])
+    d.takeoff(110)
+    u = fuwb.FakeUWBParserThread(world=w)
+    s = d.create_video_stream(); d.set_video_stream(True); s.start()
+    st, tb = MissionState(), TaskBoard()
+    ew = EvidenceWriter(tmp_path)
+    phase2_search(d, u, 0, [{"xy": (5.0, 3.0), "gimbal_deg": 90, "dwell_s": 1.0}],
+                  s, st, tb, bubble=None, all_ids=[20, 21], rover_ids=[20, 21],
+                  dictionary=DICT, budget_cycles=1, mopup_extra_cycles=0,
+                  intrinsics=INTR, evidence=ew, sleep=NOSLEEP)
+    assert st.tagged() == {20, 21} and st.count() == 2          # both banked, no double-count
+    assert (tmp_path / "rover_20.png").exists()
+    assert (tmp_path / "rover_21.png").exists()
+    text = (tmp_path / "index.html").read_text()
+    assert "ID 20" in text and "ID 21" in text                 # gallery lists every banked id
+    assert st.evidence()[20].drone_id == 0
+    assert st.evidence()[20].path.endswith("rover_20.png")
+    fpx.set_active_world(None)
+
+
+# --------------------------------------------------------------------------- #
+# R2 persistence STILL banks an initially-out-of-cone rover (now with evidence)
+# --------------------------------------------------------------------------- #
+def test_persist_with_banker_banks_out_of_cone_and_writes_evidence(tmp_path):
+    w = _world([Marker(45, 4.0, 2.0, size_m=0.20, gimbal_phase_deg=0.0)], gimbal=True)
+    d, s = _drone_over(w, 3.0, 2.0, pitch_down=52.0)
+    assert w.marker_readable(w.rovers[0], (d.n, d.e)) is False   # out of cone at t=0
+    u = fuwb.FakeUWBParserThread(world=w)
+    st = MissionState()
+    ew = EvidenceWriter(tmp_path)
+    b = ScanBanker(d, u, 0, st, allow={45}, intrinsics=INTR, gimbal_deg=52.0,
+                   search_pitch_deg=52.0, evidence=ew, clock=lambda: w.clock)
+    mid = persist_and_read(
+        d, s, (4.0, 2.0), st, allow={45}, dictionary=DICT, gimbal_deg=52.0,
+        intrinsics=INTR, uwb=u, tag_id=0, alt_m=1.1, presence=ClassicalRoverDetector(),
+        footprints=(), bounds=None, persist_timeout_s=9.0, rate_hz=20.0, sleep=NOSLEEP,
+        clock=lambda: w.clock, banker=b)
+    assert mid == 45 and st.is_tagged(45)             # gimbal swept in → banked while persisting
+    assert (tmp_path / "rover_45.png").exists()        # evidence written for the persisted bank
+    assert st.evidence()[45].drone_id == 0
+    fpx.set_active_world(None)
+
+
+# --------------------------------------------------------------------------- #
+# Phase 1 is untouched — R4 is Phase-2-only, no banking during landing
+# --------------------------------------------------------------------------- #
+def test_phase1_does_not_bank(tmp_path):
+    """Even with a rover marker rendered in the arena, a Phase-1 land banks NOTHING (the camera
+    is off in Phase 1 — R1 — and R4 added no banking to the landing path)."""
+    cfg = load_config()
+    w = _world([Marker(20, 5.0, 3.0, size_m=0.20)], crates=[])
+    fpx.set_active_world(w)
+    d = fpx.FakeDroneAPI(w)
+    d.connect(w.ip_map[0])
+    u = fuwb.FakeUWBParserThread(world=w)
+    s = d.create_video_stream()
+    st = MissionState()
+    worker = DroneWorker(d, u, 0, cfg, footprints=[], stream=s, sleep=NOSLEEP)
+    worker.run_phase1((0.6, 1.0))                      # land on a clear pad
+    assert worker.landed_ok is True
+    assert st.count() == 0                             # Phase 1 banked nothing
+    assert not (tmp_path / "index.html").exists()      # no evidence artifact produced
+    fpx.set_active_world(None)
